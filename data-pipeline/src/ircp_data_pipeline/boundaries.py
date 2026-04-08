@@ -18,6 +18,7 @@ from ircp_contracts import (
     RawDataArtifact,
     RunEvent,
     SessionManifest,
+    SessionStatus,
 )
 
 
@@ -44,6 +45,20 @@ class ReplayPlan:
     analysis_artifact_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SessionSummary:
+    session_id: str
+    recipe_id: str
+    recipe_title: str
+    created_at: datetime
+    updated_at: datetime
+    status: SessionStatus
+    raw_artifact_count: int
+    processed_artifact_count: int
+    analysis_artifact_count: int
+    export_artifact_count: int
+
+
 @runtime_checkable
 class SessionStore(Protocol):
     async def create_session_manifest(
@@ -58,6 +73,9 @@ class SessionStore(Protocol):
 
     async def append_event(self, session_id: str, event: RunEvent) -> SessionManifest:
         """Persist one run event onto the session timeline."""
+
+    async def update_session_status(self, session_id: str, status: SessionStatus) -> SessionManifest:
+        """Update the authoritative session lifecycle state."""
 
     async def register_raw_artifact(self, session_id: str, artifact: RawDataArtifact) -> SessionManifest:
         """Register a raw artifact without letting the UI own the write path."""
@@ -83,3 +101,9 @@ class SessionReplayer(Protocol):
 
     async def build_replay_plan(self, session_id: str) -> ReplayPlan:
         """Build the replay or session-reopen inputs from persisted artifacts only."""
+
+
+@runtime_checkable
+class SessionCatalog(Protocol):
+    async def list_sessions(self) -> tuple[SessionSummary, ...]:
+        """Return saved sessions for Results and reopen workflows."""

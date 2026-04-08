@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from ircp_contracts import (
+    ConfigurationScalar,
     DeviceFault,
     ExperimentPreset,
     ExperimentRecipe,
@@ -22,6 +24,25 @@ from ircp_drivers import LabOneHF2Driver, MircatDriver
 class GoldenPathDriverBundle:
     mircat: MircatDriver
     hf2li: LabOneHF2Driver
+
+
+@dataclass(frozen=True)
+class LiveDataPoint:
+    sample_id: str
+    captured_at: datetime
+    stream_name: str
+    wavenumber_cm1: float
+    value: float
+    units: str = "V"
+    metadata: dict[str, ConfigurationScalar] | None = None
+
+
+@dataclass(frozen=True)
+class RunTimeline:
+    run_id: str
+    states: tuple[RunState, ...]
+    events: tuple[RunEvent, ...]
+    live_data_points: tuple[LiveDataPoint, ...]
 
 
 @runtime_checkable
@@ -67,3 +88,9 @@ class RunCoordinator(Protocol):
 
     async def reopen_session(self, session_id: str) -> SessionManifest:
         """Reopen a saved or partial session for later replay or review."""
+
+
+@runtime_checkable
+class RunMonitor(Protocol):
+    async def get_run_timeline(self, run_id: str) -> RunTimeline:
+        """Return the explicit run-state progression, events, and live data for one run."""
