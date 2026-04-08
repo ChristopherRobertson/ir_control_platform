@@ -1,0 +1,38 @@
+{
+  "include": [
+    "contracts/src",
+    "platform/src",
+    "drivers/src",
+    "experiment-engine/src",
+    "data-pipeline/src",
+    "processing/src",
+    "analysis/src",
+    "ui-shell/src",
+    "reports/src",
+    "simulators/src",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "contracts/src",
+        "platform/src",
+        "drivers/src",
+        "experiment-engine/src",
+        "data-pipeline/src",
+        "processing/src",
+        "analysis/src",
+        "ui-shell/src",
+        "reports/src",
+        "simulators/src",
+        "tests"
+      ]
+    }
+  ]
+}
