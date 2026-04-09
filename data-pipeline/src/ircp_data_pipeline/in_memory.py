@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+import re
+from typing import Mapping
 
 from ircp_contracts import (
     AnalysisArtifact,
@@ -54,12 +56,26 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _next_session_counter(manifests: Mapping[str, SessionManifest]) -> int:
+    highest = 0
+    for session_id in manifests:
+        match = re.fullmatch(r"session-(\d+)", session_id)
+        if match is not None:
+            highest = max(highest, int(match.group(1)))
+    return highest
+
+
 class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
     """Authoritative session store for the Phase 3B simulator slice."""
 
-    def __init__(self, initial_manifests: tuple[SessionManifest, ...] = ()) -> None:
+    def __init__(
+        self,
+        initial_manifests: tuple[SessionManifest, ...] = (),
+        initial_raw_artifact_payloads: Mapping[str, tuple[dict[str, object], ...]] | None = None,
+    ) -> None:
         self._manifests = {manifest.session_id: manifest for manifest in initial_manifests}
-        self._counter = len(self._manifests)
+        self._counter = _next_session_counter(self._manifests)
+        self._raw_payloads_by_path = dict(initial_raw_artifact_payloads or {})
         self._artifacts_by_id: dict[str, ArtifactSummary] = {}
         self._artifact_ids_by_session: dict[str, tuple[str, ...]] = {}
         self._artifact_ids_by_kind: dict[ArtifactKind, tuple[str, ...]] = {}
@@ -81,6 +97,7 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
         pico_capture_snapshot: PicoSecondaryCapture,
         pico_summary: PicoCaptureSummary,
         time_to_wavenumber_mapping: TimeToWavenumberMapping | None,
+        notes: tuple[str, ...] = (),
     ) -> SessionManifest:
         self._counter += 1
         now = _utc_now()
@@ -117,6 +134,7 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
                 ),
             ),
             outcome=RunOutcomeSummary(),
+            notes=notes,
         )
         return self._store_manifest(manifest)
 
@@ -204,6 +222,15 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
         )
         return self._store_manifest(updated)
 
+    async def persist_raw_artifact(
+        self,
+        session_id: str,
+        artifact: RawDataArtifact,
+        payload_rows: tuple[dict[str, object], ...],
+    ) -> SessionManifest:
+        self._raw_payloads_by_path[artifact.relative_path] = payload_rows
+        return await self.register_raw_artifact(session_id, artifact)
+
     async def register_processed_artifact(
         self,
         session_id: str,
@@ -241,6 +268,7 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
 
     async def open_session(self, request: SessionOpenRequest) -> SessionOpenResult:
         manifest = await self.load_session(request.session_id)
+        self._ensure_raw_payloads_available(manifest.raw_artifacts)
         primary = await self.query_artifacts(
             ArtifactQuery(
                 session_id=request.session_id,
@@ -257,7 +285,7 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
         )
         return SessionOpenResult(
             manifest=manifest,
-            replay_ready=manifest.replay_ready(),
+            replay_ready=self._manifest_replay_ready(manifest),
             primary_raw_artifact_ids=tuple(artifact.artifact_id for artifact in primary),
             secondary_monitor_artifact_ids=tuple(artifact.artifact_id for artifact in secondary),
             processed_artifact_ids=tuple(
@@ -266,6 +294,8 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
         )
 
     async def build_replay_plan(self, session_id: str) -> ReplayPlan:
+        manifest = await self.load_session(session_id)
+        self._ensure_raw_payloads_available(manifest.raw_artifacts)
         primary = await self.query_artifacts(
             ArtifactQuery(
                 session_id=session_id,
@@ -322,7 +352,6 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
 
     async def get_session_detail(self, session_id: str) -> SessionDetail:
         manifest = await self.load_session(session_id)
-        replay_plan = await self.build_replay_plan(session_id)
         all_artifacts = await self.query_artifacts(ArtifactQuery(session_id=session_id))
         summary = self._build_session_summary(manifest)
         return SessionDetail(
@@ -350,7 +379,7 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
             export_artifacts=tuple(
                 artifact for artifact in all_artifacts if artifact.artifact_kind == ArtifactKind.EXPORT
             ),
-            replay_plan=replay_plan,
+            replay_plan=self._build_replay_plan_from_artifacts(session_id, all_artifacts),
         )
 
     def _require_manifest(self, session_id: str) -> SessionManifest:
@@ -447,6 +476,48 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
             )
         return tuple(summaries)
 
+    def _build_replay_plan_from_artifacts(
+        self,
+        session_id: str,
+        artifacts: tuple[ArtifactSummary, ...],
+    ) -> ReplayPlan:
+        return ReplayPlan(
+            session_id=session_id,
+            primary_raw_artifact_ids=tuple(
+                artifact.artifact_id
+                for artifact in artifacts
+                if artifact.artifact_kind == ArtifactKind.RAW
+                and artifact.source_role == ArtifactSourceRole.PRIMARY_RAW
+            ),
+            secondary_monitor_artifact_ids=tuple(
+                artifact.artifact_id
+                for artifact in artifacts
+                if artifact.artifact_kind == ArtifactKind.RAW
+                and artifact.source_role == ArtifactSourceRole.SECONDARY_MONITOR
+            ),
+            processed_artifact_ids=tuple(
+                artifact.artifact_id for artifact in artifacts if artifact.artifact_kind == ArtifactKind.PROCESSED
+            ),
+            analysis_artifact_ids=tuple(
+                artifact.artifact_id for artifact in artifacts if artifact.artifact_kind == ArtifactKind.ANALYSIS
+            ),
+        )
+
+    def _manifest_replay_ready(self, manifest: SessionManifest) -> bool:
+        return manifest.replay_ready() and all(
+            self._payload_exists(artifact.relative_path) for artifact in manifest.raw_artifacts
+        )
+
+    def _payload_exists(self, relative_path: str) -> bool:
+        return relative_path in self._raw_payloads_by_path
+
+    def _ensure_raw_payloads_available(self, artifacts: tuple[RawDataArtifact, ...]) -> None:
+        for artifact in artifacts:
+            if not self._payload_exists(artifact.relative_path):
+                raise FileNotFoundError(
+                    f"Missing persisted raw payload for artifact {artifact.artifact_id}: {artifact.relative_path}"
+                )
+
     def _build_session_summary(self, manifest: SessionManifest) -> SessionSummary:
         last_event_at = manifest.event_timeline[-1].emitted_at if manifest.event_timeline else None
         return SessionSummary(
@@ -458,7 +529,7 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
             status=manifest.status,
             event_count=len(manifest.event_timeline),
             last_event_at=last_event_at,
-            replay_ready=manifest.replay_ready(),
+            replay_ready=self._manifest_replay_ready(manifest),
             primary_raw_artifact_count=len(manifest.primary_raw_artifacts()),
             secondary_monitor_artifact_count=len(manifest.secondary_monitor_artifacts()),
             processed_artifact_count=len(manifest.processing_outputs),

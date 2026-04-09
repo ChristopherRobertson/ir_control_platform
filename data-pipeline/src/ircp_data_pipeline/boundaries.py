@@ -133,6 +133,7 @@ class SessionStore(Protocol):
         pico_capture_snapshot: PicoSecondaryCapture,
         pico_summary: PicoCaptureSummary,
         time_to_wavenumber_mapping: TimeToWavenumberMapping | None,
+        notes: tuple[str, ...] = (),
     ) -> SessionManifest:
         """Create the authoritative session record before run completion."""
 
@@ -166,6 +167,14 @@ class SessionStore(Protocol):
 
     async def register_raw_artifact(self, session_id: str, artifact: RawDataArtifact) -> SessionManifest:
         """Register a raw artifact without letting the UI own the write path."""
+
+    async def persist_raw_artifact(
+        self,
+        session_id: str,
+        artifact: RawDataArtifact,
+        payload_rows: tuple[dict[str, object], ...],
+    ) -> SessionManifest:
+        """Write one structured raw payload durably, then register the raw artifact in the session manifest."""
 
     async def register_processed_artifact(
         self, session_id: str, artifact: ProcessedArtifact

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import json
 from typing import Callable, Mapping
 
 from ircp_contracts import (
@@ -167,7 +168,7 @@ class RawArtifactTemplate:
     relative_path: str
     record_count: int
     source_role: ArtifactSourceRole
-    content_type: str = "text/plain"
+    content_type: str = "application/vnd.apache.parquet"
     mux_output_target: str | None = None
     related_marker: str | None = None
     metadata: Mapping[str, ConfigurationScalar] = field(default_factory=dict)
@@ -315,6 +316,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         self,
         recipe: ExperimentRecipe,
         preset: ExperimentPreset | None,
+        notes: tuple[str, ...] = (),
     ) -> SessionManifest:
         timing_summary = build_timing_summary(recipe)
         pump_probe_summary = build_pump_probe_summary(recipe)
@@ -355,6 +357,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             pico_capture_snapshot=recipe.pico_secondary_capture,
             pico_summary=pico_summary,
             time_to_wavenumber_mapping=recipe.time_to_wavenumber_mapping,
+            notes=notes,
         )
 
         created_at = _utc_now()
@@ -493,7 +496,11 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                     ),
                     metadata=dict(artifact_template.metadata),
                 )
-                session_manifest = await self._session_store.register_raw_artifact(session_id, artifact)
+                session_manifest = await self._session_store.persist_raw_artifact(
+                    session_id,
+                    artifact,
+                    _build_raw_artifact_rows(step.live_data_points, artifact_template),
+                )
 
             if step.live_data_points:
                 timeline_live_data.extend(step.live_data_points)
@@ -697,6 +704,71 @@ def _replace_status_with_fault(
         if status.device_id == fault.device_id
         else status
         for status in statuses
+    )
+
+
+def _stream_metadata(stream_name: str) -> dict[str, object]:
+    if stream_name.startswith("hf2.demod") and stream_name.count(".") >= 2:
+        _prefix, demod_token, component = stream_name.split(".", 2)
+        try:
+            demod_index: int | str | None = int(demod_token.removeprefix("demod"))
+        except ValueError:
+            demod_index = demod_token.removeprefix("demod")
+        return {
+            "demod_index": demod_index,
+            "component_name": component,
+            "channel_name": None,
+        }
+    if stream_name.startswith("pico.") and "." in stream_name:
+        _prefix, channel_name = stream_name.split(".", 1)
+        return {
+            "demod_index": None,
+            "component_name": None,
+            "channel_name": channel_name,
+        }
+    return {
+        "demod_index": None,
+        "component_name": None,
+        "channel_name": None,
+    }
+
+
+def _build_raw_artifact_rows(
+    live_data_points: tuple[LiveDataPoint, ...],
+    artifact_template: RawArtifactTemplate,
+) -> tuple[dict[str, object], ...]:
+    matching_points = tuple(
+        point
+        for point in live_data_points
+        if point.stream_name == artifact_template.stream_name
+        and point.source_role == artifact_template.source_role
+    )
+    if len(matching_points) != artifact_template.record_count:
+        raise ValueError(
+            "Raw artifact payload row count does not match the artifact template: "
+            f"{artifact_template.relative_path} expected {artifact_template.record_count}, "
+            f"got {len(matching_points)}."
+        )
+    stream_metadata = _stream_metadata(artifact_template.stream_name)
+    return tuple(
+        {
+            "acquisition_index": index,
+            "sample_id": point.sample_id,
+            "captured_at": point.captured_at.isoformat(),
+            "device_kind": artifact_template.device_kind.value,
+            "stream_name": point.stream_name,
+            "axis_label": point.axis_label,
+            "axis_units": point.axis_units,
+            "axis_value": point.axis_value,
+            "value": point.value,
+            "units": point.units,
+            "source_role": point.source_role.value,
+            "mux_output_target": artifact_template.mux_output_target,
+            "related_marker": artifact_template.related_marker,
+            "metadata_json": json.dumps(dict(point.metadata or {}), sort_keys=True),
+            **stream_metadata,
+        }
+        for index, point in enumerate(matching_points, start=1)
     )
 
 

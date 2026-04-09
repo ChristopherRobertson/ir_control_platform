@@ -76,6 +76,7 @@ class RunCoordinator(Protocol):
         self,
         recipe: ExperimentRecipe,
         preset: ExperimentPreset | None,
+        notes: tuple[str, ...] = (),
     ) -> SessionManifest:
         """Create the authoritative session record before coordinated execution."""
 

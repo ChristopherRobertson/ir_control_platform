@@ -6,6 +6,7 @@ import asyncio
 import unittest
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import urlencode
 from wsgiref.util import setup_testing_defaults
 
@@ -50,15 +51,25 @@ def _call_wsgi(
 
 
 class Phase3BUiFoundationTests(unittest.TestCase):
+    def _create_runtime_map(self):
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        return create_phase3b_runtime_map(storage_root=Path(tempdir.name))
+
+    def _create_app(self):
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        return create_phase3b_simulator_app(storage_root=Path(tempdir.name))
+
     def test_root_redirects_to_setup(self) -> None:
-        app = create_phase3b_simulator_app()
+        app = self._create_app()
         status, headers, _body = _call_wsgi(app, method="GET", path="/")
 
         self.assertEqual(status, "303 See Other")
         self.assertEqual(headers["Location"], "/setup?scenario=nominal")
 
     def test_setup_route_renders_supported_v1_summary(self) -> None:
-        app = create_phase3b_simulator_app()
+        app = self._create_app()
         status, _headers, body = _call_wsgi(app, method="GET", path="/setup?scenario=nominal")
 
         self.assertEqual(status, "200 OK")
@@ -67,7 +78,7 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertIn("Pico Secondary", body)
 
     def test_blocked_timing_scenario_shows_explicit_blocked_state(self) -> None:
-        runtimes = create_phase3b_runtime_map()
+        runtimes = self._create_runtime_map()
         blocked_page = asyncio.run(runtimes["blocked_timing"].get_setup_page())
 
         self.assertIsNotNone(blocked_page.state)
@@ -75,7 +86,7 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertIn("blocking", blocked_page.state.message.lower())
 
     def test_optional_pico_unavailability_surfaces_warning_not_block(self) -> None:
-        runtimes = create_phase3b_runtime_map()
+        runtimes = self._create_runtime_map()
         setup_page = asyncio.run(runtimes["pico_optional"].get_setup_page())
 
         self.assertIsNotNone(setup_page.state)
@@ -83,7 +94,7 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertIn("optional", setup_page.state.message.lower())
 
     def test_nominal_start_run_materializes_primary_and_secondary_artifacts(self) -> None:
-        runtimes = create_phase3b_runtime_map()
+        runtimes = self._create_runtime_map()
         runtime = runtimes["nominal"]
 
         run_state = asyncio.run(runtime.start_run())
@@ -104,7 +115,7 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertGreater(len(results_page.event_log), 0)
 
     def test_faulted_scenario_surfaces_fault_page_state(self) -> None:
-        runtimes = create_phase3b_runtime_map()
+        runtimes = self._create_runtime_map()
         runtime = runtimes["faulted_hf2"]
 
         run_state = asyncio.run(runtime.start_run())
@@ -116,7 +127,7 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertIn("fault", run_page.state.message.lower())
 
     def test_results_reopen_uses_saved_supported_v1_session_fixture(self) -> None:
-        runtimes = create_phase3b_runtime_map()
+        runtimes = self._create_runtime_map()
         runtime = runtimes["nominal"]
 
         manifest = asyncio.run(runtime.reopen_session("saved-session-001"))
@@ -133,7 +144,7 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertGreater(len(results_page.event_log), 0)
 
     def test_wsgi_start_flow_updates_run_route(self) -> None:
-        app = create_phase3b_simulator_app()
+        app = self._create_app()
         status, headers, _body = _call_wsgi(
             app,
             method="POST",

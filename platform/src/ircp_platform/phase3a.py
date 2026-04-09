@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 from ircp_contracts import (
     ArtifactSourceRole,
@@ -16,11 +17,12 @@ from ircp_contracts import (
     SessionStatus,
 )
 from ircp_data_pipeline import (
-    InMemorySessionStore,
+    FilesystemSessionStore,
     SessionCatalog,
     SessionDetail,
     SessionOpenRequest,
     SessionReplayer,
+    SessionStore,
 )
 from ircp_experiment_engine import SupportedV1DriverBundle
 from ircp_experiment_engine.runtime import SupportedV1PreflightValidator, InMemoryRunCoordinator
@@ -62,7 +64,7 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
         *,
         scenario: Phase3BScenarioContext,
         scenario_options: tuple[ScenarioOption, ...],
-        session_store: InMemorySessionStore,
+        session_store: SessionStore,
         coordinator: InMemoryRunCoordinator,
         session_catalog: SessionCatalog,
         session_replayer: SessionReplayer,
@@ -387,7 +389,14 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
         preflight = await self._ensure_preflight()
         if not preflight.ready_to_start:
             raise ValueError("Preflight is blocked.")
-        manifest = await self._coordinator.create_session(self._scenario.recipe, self._scenario.preset)
+        manifest = await self._coordinator.create_session(
+            self._scenario.recipe,
+            self._scenario.preset,
+            notes=(
+                f"runtime_mode:simulator:{self._scenario.scenario_id}",
+                f"runtime_description:{self._scenario.description}",
+            ),
+        )
         self._selected_session_id = manifest.session_id
         run_state = await self._coordinator.start_run(
             self._scenario.recipe,
@@ -718,9 +727,17 @@ def _state_summary(state: RunState) -> str:
     return state.phase.value
 
 
-def create_phase3b_runtime_map() -> dict[str, Phase3BSimulatorRuntime]:
+def _phase3b_storage_base_root(storage_root: Path | None = None) -> Path:
+    if storage_root is not None:
+        return storage_root.resolve()
+    # Repo-local runtime state keeps saved sessions inspectable during local development.
+    return Path(__file__).resolve().parents[3] / ".local_state"
+
+
+def create_phase3b_runtime_map(storage_root: Path | None = None) -> dict[str, Phase3BSimulatorRuntime]:
     catalog = SupportedV1SimulatorCatalog()
     contexts = catalog.list_contexts()
+    base_root = _phase3b_storage_base_root(storage_root)
     options = tuple(
         ScenarioOption(
             scenario_id=context.scenario_id,
@@ -732,7 +749,11 @@ def create_phase3b_runtime_map() -> dict[str, Phase3BSimulatorRuntime]:
     )
     runtimes: dict[str, Phase3BSimulatorRuntime] = {}
     for context in contexts:
-        session_store = InMemorySessionStore(initial_manifests=context.initial_manifests)
+        session_store = FilesystemSessionStore(
+            root=base_root,
+            initial_manifests=context.initial_manifests,
+            initial_raw_artifact_payloads=context.initial_raw_artifact_payloads,
+        )
         coordinator = InMemoryRunCoordinator(
             drivers=SupportedV1DriverBundle(
                 mircat=context.bundle.mircat,
@@ -758,8 +779,8 @@ def create_phase3b_runtime_map() -> dict[str, Phase3BSimulatorRuntime]:
     return runtimes
 
 
-def create_phase3b_simulator_app():
-    return create_ui_app(create_phase3b_runtime_map(), default_scenario="nominal")
+def create_phase3b_simulator_app(storage_root: Path | None = None):
+    return create_ui_app(create_phase3b_runtime_map(storage_root=storage_root), default_scenario="nominal")
 
 
 def run_phase3b_demo(host: str = "127.0.0.1", port: int = 8000) -> None:

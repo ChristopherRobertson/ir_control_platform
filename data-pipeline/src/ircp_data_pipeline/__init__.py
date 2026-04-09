@@ -12,11 +12,13 @@ from .boundaries import (
     SessionStore,
     SessionSummary,
 )
+from .filesystem import FilesystemSessionStore
 from .in_memory import InMemorySessionStore
 
 __all__ = [
     "ArtifactQuery",
     "ArtifactSummary",
+    "FilesystemSessionStore",
     "InMemorySessionStore",
     "ReplayPlan",
     "SessionCatalog",

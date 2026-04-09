@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
+from typing import Mapping
 
 from ircp_contracts import (
     AcquisitionTimingMode,
@@ -825,6 +827,7 @@ class Phase3BScenarioContext:
     preset: ExperimentPreset
     run_plan_factory: RunPlanFactory
     initial_manifests: tuple[SessionManifest, ...] = ()
+    initial_raw_artifact_payloads: Mapping[str, tuple[dict[str, object], ...]] = field(default_factory=dict)
 
 
 class SupportedV1SimulatorCatalog(SimulatorCatalog):
@@ -861,7 +864,7 @@ def _build_nominal_context() -> Phase3BScenarioContext:
     recipe = _recipe_defaults()
     preset = _preset_defaults(recipe)
     bundle = _build_bundle(description="Nominal supported-v1 simulator bundle.")
-    saved_session = _build_saved_session(recipe, preset)
+    saved_session, saved_payloads = _build_saved_session_fixture(recipe, preset)
     return Phase3BScenarioContext(
         scenario_id="nominal",
         label="Nominal",
@@ -871,6 +874,7 @@ def _build_nominal_context() -> Phase3BScenarioContext:
         preset=preset,
         run_plan_factory=_build_nominal_plan,
         initial_manifests=(saved_session,),
+        initial_raw_artifact_payloads=saved_payloads,
     )
 
 
@@ -1076,7 +1080,7 @@ def _build_nominal_plan(recipe: ExperimentRecipe, session_id: str, run_id: str) 
                     RawArtifactTemplate(
                         device_kind=DeviceKind.LABONE_HF2LI,
                         stream_name="hf2.demod0.r",
-                        relative_path=f"sessions/{session_id}/raw/hf2/demod0_r.txt",
+                        relative_path=f"sessions/{session_id}/artifacts/raw/hf2_demod0_r.parquet",
                         record_count=len(hf2_live_points),
                         source_role=ArtifactSourceRole.PRIMARY_RAW,
                         metadata={"mapping_id": recipe.time_to_wavenumber_mapping.mapping_id},
@@ -1084,7 +1088,7 @@ def _build_nominal_plan(recipe: ExperimentRecipe, session_id: str, run_id: str) 
                     RawArtifactTemplate(
                         device_kind=DeviceKind.PICOSCOPE_5244D,
                         stream_name="pico.channel_a",
-                        relative_path=f"sessions/{session_id}/raw/pico/channel_a_trace.txt",
+                        relative_path=f"sessions/{session_id}/artifacts/raw/pico_channel_a_trace.parquet",
                         record_count=len(pico_live_points),
                         source_role=ArtifactSourceRole.SECONDARY_MONITOR,
                         mux_output_target=MuxOutputTarget.PICO_CHANNEL_A.value,
@@ -1157,7 +1161,7 @@ def _build_nominal_without_pico_plan(recipe: ExperimentRecipe, session_id: str, 
                     RawArtifactTemplate(
                         device_kind=DeviceKind.LABONE_HF2LI,
                         stream_name="hf2.demod0.r",
-                        relative_path=f"sessions/{session_id}/raw/hf2/demod0_r.txt",
+                        relative_path=f"sessions/{session_id}/artifacts/raw/hf2_demod0_r.parquet",
                         record_count=len(hf2_live_points),
                         source_role=ArtifactSourceRole.PRIMARY_RAW,
                         metadata={"mapping_id": recipe.time_to_wavenumber_mapping.mapping_id},
@@ -1254,7 +1258,7 @@ def _build_faulted_plan(recipe: ExperimentRecipe, session_id: str, run_id: str) 
                     RawArtifactTemplate(
                         device_kind=DeviceKind.LABONE_HF2LI,
                         stream_name="hf2.demod0.r",
-                        relative_path=f"sessions/{session_id}/raw/hf2/demod0_r_partial.txt",
+                        relative_path=f"sessions/{session_id}/artifacts/raw/hf2_demod0_r_partial.parquet",
                         record_count=len(hf2_live_points),
                         source_role=ArtifactSourceRole.PRIMARY_RAW,
                         metadata={"fault_injected": True},
@@ -1262,7 +1266,7 @@ def _build_faulted_plan(recipe: ExperimentRecipe, session_id: str, run_id: str) 
                     RawArtifactTemplate(
                         device_kind=DeviceKind.PICOSCOPE_5244D,
                         stream_name="pico.channel_a",
-                        relative_path=f"sessions/{session_id}/raw/pico/channel_a_trace_partial.txt",
+                        relative_path=f"sessions/{session_id}/artifacts/raw/pico_channel_a_trace_partial.parquet",
                         record_count=len(pico_live_points),
                         source_role=ArtifactSourceRole.SECONDARY_MONITOR,
                         mux_output_target=MuxOutputTarget.PICO_CHANNEL_A.value,
@@ -1291,6 +1295,74 @@ def _build_faulted_plan(recipe: ExperimentRecipe, session_id: str, run_id: str) 
     )
 
 
+def _live_data_points_to_rows(live_data_points, *, device_kind: DeviceKind) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            "acquisition_index": index,
+            "sample_id": point.sample_id,
+            "captured_at": point.captured_at.isoformat(),
+            "device_kind": device_kind.value,
+            "stream_name": point.stream_name,
+            "axis_label": point.axis_label,
+            "axis_units": point.axis_units,
+            "axis_value": point.axis_value,
+            "value": point.value,
+            "units": point.units,
+            "source_role": point.source_role.value,
+            "mux_output_target": None,
+            "related_marker": None,
+            "metadata_json": json.dumps(dict(point.metadata or {}), sort_keys=True),
+            "demod_index": 0 if point.stream_name.startswith("hf2.demod0.") else None,
+            "component_name": point.stream_name.rsplit(".", 1)[-1] if point.stream_name.startswith("hf2.") else None,
+            "channel_name": point.stream_name.split(".", 1)[1] if point.stream_name.startswith("pico.") else None,
+        }
+        for index, point in enumerate(live_data_points, start=1)
+    )
+
+
+def _build_saved_session_fixture(
+    recipe: ExperimentRecipe,
+    preset: ExperimentPreset,
+) -> tuple[SessionManifest, dict[str, tuple[dict[str, object], ...]]]:
+    manifest = _build_saved_session(recipe, preset)
+    hf2_live_points = build_live_data_points(
+        "saved-run-001",
+        "hf2.demod0.r",
+        "Wavenumber",
+        "cm^-1",
+        (
+            (1700.0, 0.14),
+            (1725.0, 0.18),
+            (1750.0, 0.23),
+            (1775.0, 0.19),
+            (1800.0, 0.17),
+        ),
+    )
+    pico_live_points = build_live_data_points(
+        "saved-run-001",
+        "pico.channel_a",
+        "Time",
+        "ns",
+        (
+            (0.0, 0.01),
+            (200.0, 0.45),
+            (600.0, 0.77),
+            (900.0, 0.21),
+        ),
+        source_role=ArtifactSourceRole.SECONDARY_MONITOR,
+    )
+    return manifest, {
+        manifest.raw_artifacts[0].relative_path: _live_data_points_to_rows(
+            hf2_live_points,
+            device_kind=DeviceKind.LABONE_HF2LI,
+        ),
+        manifest.raw_artifacts[1].relative_path: _live_data_points_to_rows(
+            pico_live_points,
+            device_kind=DeviceKind.PICOSCOPE_5244D,
+        ),
+    }
+
+
 def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> SessionManifest:
     created_at = _utc_now()
     primary_raw = RawDataArtifact(
@@ -1298,9 +1370,10 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
         session_id="saved-session-001",
         device_kind=DeviceKind.LABONE_HF2LI,
         stream_name="hf2.demod0.r",
-        relative_path="sessions/saved-session-001/raw/hf2/demod0_r.txt",
+        relative_path="sessions/saved-session-001/artifacts/raw/hf2_demod0_r.parquet",
         created_at=created_at,
         record_count=5,
+        content_type="application/vnd.apache.parquet",
         source_role=ArtifactSourceRole.PRIMARY_RAW,
         registered_by_event_id="saved-session-event-primary-raw",
         metadata={"mapping_id": recipe.time_to_wavenumber_mapping.mapping_id},
@@ -1310,9 +1383,10 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
         session_id="saved-session-001",
         device_kind=DeviceKind.PICOSCOPE_5244D,
         stream_name="pico.channel_a",
-        relative_path="sessions/saved-session-001/raw/pico/channel_a_trace.txt",
+        relative_path="sessions/saved-session-001/artifacts/raw/pico_channel_a_trace.parquet",
         created_at=created_at,
         record_count=4,
+        content_type="application/vnd.apache.parquet",
         source_role=ArtifactSourceRole.SECONDARY_MONITOR,
         mux_output_target=MuxOutputTarget.PICO_CHANNEL_A.value,
         related_marker=TimingMarker.NDYAG_FIXED_SYNC.value,
@@ -1536,5 +1610,9 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
             ended_at=created_at,
             final_event_id="saved-session-event-complete",
         ),
-        notes=("Saved session fixture for Results reopen scaffolding.",),
+        notes=(
+            "Saved session fixture for Results reopen scaffolding.",
+            "runtime_mode:simulator:nominal",
+            "runtime_description:Supported-v1 nominal saved-session fixture.",
+        ),
     )
