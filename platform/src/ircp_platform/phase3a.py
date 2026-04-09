@@ -13,8 +13,15 @@ from ircp_contracts import (
     RunPhase,
     RunState,
     SessionManifest,
+    SessionStatus,
 )
-from ircp_data_pipeline import InMemorySessionStore, SessionCatalog, SessionOpenRequest, SessionReplayer
+from ircp_data_pipeline import (
+    InMemorySessionStore,
+    SessionCatalog,
+    SessionDetail,
+    SessionOpenRequest,
+    SessionReplayer,
+)
 from ircp_experiment_engine import SupportedV1DriverBundle
 from ircp_experiment_engine.runtime import SupportedV1PreflightValidator, InMemoryRunCoordinator
 from ircp_simulators import Phase3BScenarioContext, SupportedV1SimulatorCatalog
@@ -259,6 +266,9 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                 processed_artifact_count=summary.processed_artifact_count,
                 analysis_artifact_count=summary.analysis_artifact_count,
                 export_artifact_count=summary.export_artifact_count,
+                event_count=summary.event_count,
+                replay_ready=summary.replay_ready,
+                failure_reason_label=summary.failure_reason.value if summary.failure_reason else None,
                 selected=summary.session_id == selected_id,
             )
             for summary in sessions
@@ -266,6 +276,8 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
 
         page_state = None
         detail_panels: tuple[SummaryPanel, ...] = ()
+        artifact_panels: tuple[SummaryPanel, ...] = ()
+        event_log: tuple[EventLogItem, ...] = ()
         selected_session = next((card for card in session_cards if card.session_id == selected_id), None)
         if not session_cards:
             page_state = empty_state(
@@ -274,12 +286,46 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                 details=("Nominal scenarios seed one saved fixture and new runs create more.",),
             )
         elif selected_id is not None:
-            manifest = await self.reopen_session(selected_id)
-            detail_panels = self._detail_panels_from_manifest(manifest)
+            detail = await self._session_catalog.get_session_detail(selected_id)
+            detail_panels = self._detail_panels_from_session_detail(detail)
+            artifact_panels = self._artifact_panels_from_session_detail(detail)
+            event_log = tuple(
+                EventLogItem(
+                    timestamp=event.emitted_at,
+                    source=event.source,
+                    message=event.message,
+                    tone=_event_tone(event.event_type),
+                )
+                for event in detail.event_timeline
+            )
+            if detail.manifest.status == SessionStatus.FAULTED:
+                page_state = fault_state(
+                    "Saved session faulted",
+                    "The selected saved session ended with an explicit persisted fault.",
+                    details=(
+                        detail.manifest.outcome.latest_fault.message,
+                    )
+                    if detail.manifest.outcome.latest_fault is not None
+                    else (
+                        detail.manifest.outcome.failure_reason.value,
+                    )
+                    if detail.manifest.outcome.failure_reason is not None
+                    else (),
+                )
+            elif detail.manifest.status == SessionStatus.ABORTED:
+                page_state = warning_state(
+                    "Saved session aborted",
+                    "The selected saved session was aborted and is being shown from persisted partial state.",
+                    details=(
+                        detail.manifest.outcome.failure_reason.value,
+                    )
+                    if detail.manifest.outcome.failure_reason is not None
+                    else (),
+                )
 
         return ResultsPageModel(
             title="Results",
-            subtitle="Saved session summaries with persisted timing, routing, and provenance context.",
+            subtitle="Saved session summaries with persisted outcome, timing, artifact, and event context.",
             state=page_state,
             section_header=SectionHeader(
                 title="Session Catalog",
@@ -288,6 +334,8 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
             sessions=session_cards,
             selected_session=selected_session,
             detail_panels=detail_panels,
+            artifact_panels=artifact_panels,
+            event_log=event_log,
         )
 
     async def get_service_page(self) -> ServicePageModel:
@@ -549,7 +597,8 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
             ),
         )
 
-    def _detail_panels_from_manifest(self, manifest: SessionManifest) -> tuple[SummaryPanel, ...]:
+    def _detail_panels_from_session_detail(self, detail: SessionDetail) -> tuple[SummaryPanel, ...]:
+        manifest = detail.manifest
         return (
             SummaryPanel(
                 title="Manifest Summary",
@@ -558,8 +607,21 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                     f"Session: {manifest.session_id}",
                     f"Status: {manifest.status.value}",
                     f"Recipe: {manifest.recipe_snapshot.title}",
+                    f"Replay ready: {'yes' if detail.summary.replay_ready else 'no'}",
+                    f"Events persisted: {detail.summary.event_count}",
                     f"Primary raw artifacts: {len(manifest.primary_raw_artifacts())}",
                     f"Secondary monitor artifacts: {len(manifest.secondary_monitor_artifacts())}",
+                ),
+            ),
+            SummaryPanel(
+                title="Outcome and Replay",
+                subtitle="Explicit persisted terminal state and replay inputs.",
+                items=(
+                    f"Run started: {manifest.outcome.started_at.isoformat() if manifest.outcome.started_at else 'n/a'}",
+                    f"Run ended: {manifest.outcome.ended_at.isoformat() if manifest.outcome.ended_at else 'n/a'}",
+                    f"Failure reason: {manifest.outcome.failure_reason.value if manifest.outcome.failure_reason else 'none'}",
+                    f"Final event: {manifest.outcome.final_event_id or 'n/a'}",
+                    f"Primary replay inputs: {len(detail.replay_plan.primary_raw_artifact_ids)}",
                 ),
             ),
             SummaryPanel(
@@ -584,6 +646,39 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                 ),
             ),
         )
+
+    def _artifact_panels_from_session_detail(self, detail: SessionDetail) -> tuple[SummaryPanel, ...]:
+        groups = (
+            ("Primary Raw Artifacts", "HF2 remains the primary scientific raw-data authority.", detail.primary_raw_artifacts),
+            (
+                "Secondary Monitor Artifacts",
+                "Pico monitor traces remain secondary context only.",
+                detail.secondary_monitor_artifacts,
+            ),
+            ("Processed Artifacts", "Persisted processed outputs remain separate from raw authority.", detail.processed_artifacts),
+            ("Analysis Artifacts", "Persisted analysis outputs remain separate from raw and processed outputs.", detail.analysis_artifacts),
+            ("Export Artifacts", "Persisted exports cite their saved source artifacts.", detail.export_artifacts),
+        )
+        panels: list[SummaryPanel] = []
+        for title, subtitle, artifacts in groups:
+            items = tuple(
+                self._artifact_summary_line(artifact)
+                for artifact in artifacts
+            ) or ("None recorded for this session.",)
+            panels.append(SummaryPanel(title=title, subtitle=subtitle, items=items))
+        return tuple(panels)
+
+    def _artifact_summary_line(self, artifact) -> str:
+        source_bits = [artifact.artifact_id, artifact.relative_path]
+        if artifact.stream_name:
+            source_bits.append(f"stream={artifact.stream_name}")
+        if artifact.source_role:
+            source_bits.append(f"role={artifact.source_role.value}")
+        if artifact.device_kind:
+            source_bits.append(f"device={artifact.device_kind.value}")
+        if artifact.related_marker:
+            source_bits.append(f"marker={artifact.related_marker}")
+        return " | ".join(source_bits)
 
     async def _ensure_preflight(self) -> PreflightReport:
         if self._last_preflight is None:

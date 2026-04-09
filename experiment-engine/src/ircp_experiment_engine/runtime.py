@@ -195,6 +195,12 @@ class RunExecutionPlan:
 RunPlanFactory = Callable[[ExperimentRecipe, str, str], RunExecutionPlan]
 
 
+@dataclass(frozen=True)
+class RunCaptureHandles:
+    hf2_capture_id: str
+    pico_capture_id: str | None = None
+
+
 class SupportedV1PreflightValidator(PreflightValidator):
     """Deterministic preflight evaluator for the supported-v1 slice."""
 
@@ -303,6 +309,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         self._run_counter = 0
         self._session_manifests: dict[str, SessionManifest] = {}
         self._run_timelines: dict[str, RunTimeline] = {}
+        self._active_captures: dict[str, RunCaptureHandles] = {}
 
     async def create_session(
         self,
@@ -404,7 +411,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         self._run_counter += 1
         run_id = f"run-{self._run_counter:03d}"
 
-        await self._session_store.update_session_status(session_id, SessionStatus.ACTIVE)
+        session_manifest = await self._session_store.update_session_status(session_id, SessionStatus.ACTIVE)
         await self._drivers.t660_master.arm_outputs()
         await self._drivers.t660_slave.arm_outputs()
         await self._drivers.mircat.arm()
@@ -421,8 +428,11 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                 pico_capture_id = pico_capture.capture_id if pico_capture is not None else None
 
         await self._drivers.mircat.start_recipe(recipe.mircat, recipe.probe_timing_mode)
+        self._active_captures[run_id] = RunCaptureHandles(
+            hf2_capture_id=hf2_capture.capture_id,
+            pico_capture_id=pico_capture_id,
+        )
 
-        session_manifest = self._session_manifests[session_id]
         timeline_events = list(session_manifest.event_timeline)
         timeline_states: list[RunState] = []
         timeline_live_data: list[LiveDataPoint] = []
@@ -431,6 +441,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
 
         plan = self._run_plan_factory(recipe, session_id, run_id)
         for step_index, step in enumerate(plan.steps, start=1):
+            step_events: list[RunEvent] = []
             for event_template in step.events:
                 event = RunEvent(
                     event_id=f"{run_id}-event-{step_index}-{event_template.event_type.value}",
@@ -451,11 +462,20 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                     payload=dict(event_template.payload),
                 )
                 session_manifest = await self._session_store.append_event(session_id, event)
+                step_events.append(event)
                 timeline_events.append(event)
 
+            raw_artifact_events = [
+                event for event in step_events if event.event_type == RunEventType.RAW_ARTIFACT_REGISTERED
+            ]
             for artifact_index, artifact_template in enumerate(step.raw_artifacts, start=1):
                 from ircp_contracts import RawDataArtifact  # local import keeps this module focused
 
+                registration_event = (
+                    raw_artifact_events[artifact_index - 1]
+                    if artifact_index - 1 < len(raw_artifact_events)
+                    else None
+                )
                 artifact = RawDataArtifact(
                     artifact_id=f"{run_id}-raw-{step_index}-{artifact_index}",
                     session_id=session_id,
@@ -468,6 +488,9 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                     source_role=artifact_template.source_role,
                     mux_output_target=artifact_template.mux_output_target,
                     related_marker=artifact_template.related_marker,
+                    registered_by_event_id=(
+                        registration_event.event_id if registration_event is not None else None
+                    ),
                     metadata=dict(artifact_template.metadata),
                 )
                 session_manifest = await self._session_store.register_raw_artifact(session_id, artifact)
@@ -499,7 +522,21 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
 
         final_state = timeline_states[-1]
         final_status = _phase_to_session_status(final_state.phase)
-        session_manifest = await self._session_store.update_session_status(session_id, final_status)
+        if final_status in {SessionStatus.COMPLETED, SessionStatus.FAULTED, SessionStatus.ABORTED}:
+            session_manifest = await self._session_store.finalize_session(
+                session_id,
+                final_status,
+                ended_at=final_state.updated_at,
+                failure_reason=failure_reason,
+                latest_fault=latest_fault,
+                final_event=timeline_events[-1] if timeline_events else None,
+                note=final_state.active_step,
+            )
+        elif final_status != session_manifest.status:
+            session_manifest = await self._session_store.update_session_status(session_id, final_status)
+
+        if final_state.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED}:
+            await self._teardown_run(run_id)
 
         device_status_snapshot = await _collect_driver_statuses(self._drivers)
         if latest_fault is not None:
@@ -515,14 +552,6 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             events=tuple(timeline_events),
             live_data_points=tuple(timeline_live_data),
         )
-
-        await self._drivers.hf2li.stop_capture(hf2_capture.capture_id)
-        if pico_capture_id is not None:
-            await self._drivers.picoscope.stop_capture(pico_capture_id)
-        await self._drivers.mircat.stop_recipe()
-        await self._drivers.mircat.disarm()
-        await self._drivers.t660_slave.stop_outputs()
-        await self._drivers.t660_master.stop_outputs()
 
         return final_state
 
@@ -574,16 +603,51 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             pico_summary=previous.pico_summary,
             latest_fault=previous.latest_fault,
             failure_reason=reason,
-            last_event_id=previous.last_event_id,
+            last_event_id=f"{run_id}-event-aborted",
         )
+        aborted_event = RunEvent(
+            event_id=f"{run_id}-event-aborted",
+            run_id=run_id,
+            event_type=RunEventType.RUN_ABORTED,
+            emitted_at=aborted.updated_at,
+            source="experiment-engine",
+            message="The supported-v1 run was aborted explicitly before a completed outcome.",
+            phase=RunPhase.ABORTED,
+            session_id=previous.session_id,
+            device_fault=previous.latest_fault,
+            failure_reason=reason,
+            timing_summary=previous.timing_summary,
+            pump_probe_summary=previous.pump_probe_summary,
+            selected_markers=previous.selected_markers,
+            mux_summary=previous.mux_summary,
+            pico_summary=previous.pico_summary,
+        )
+        timeline_events = (*timeline.events, aborted_event)
         self._run_timelines[run_id] = RunTimeline(
             run_id=run_id,
             states=(*timeline.states, aborted),
-            events=timeline.events,
+            events=timeline_events,
             live_data_points=timeline.live_data_points,
         )
         if previous.session_id is not None:
-            await self._session_store.update_session_status(previous.session_id, SessionStatus.ABORTED)
+            await self._session_store.append_event(previous.session_id, aborted_event)
+            session_manifest = await self._session_store.finalize_session(
+                previous.session_id,
+                SessionStatus.ABORTED,
+                ended_at=aborted.updated_at,
+                failure_reason=reason,
+                latest_fault=previous.latest_fault,
+                final_event=aborted_event,
+                note="aborted",
+            )
+            await self._teardown_run(run_id)
+            session_manifest = await self._session_store.update_device_snapshots(
+                previous.session_id,
+                device_status_snapshot=await _collect_driver_statuses(self._drivers),
+            )
+            self._session_manifests[previous.session_id] = session_manifest
+        else:
+            await self._teardown_run(run_id)
         return aborted
 
     async def reopen_session(self, session_id: str) -> SessionManifest:
@@ -600,6 +664,17 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             return self._run_timelines[run_id]
         except KeyError as exc:
             raise KeyError(f"Unknown run id: {run_id}") from exc
+
+    async def _teardown_run(self, run_id: str) -> None:
+        capture_handles = self._active_captures.pop(run_id, None)
+        if capture_handles is not None:
+            await self._drivers.hf2li.stop_capture(capture_handles.hf2_capture_id)
+            if capture_handles.pico_capture_id is not None:
+                await self._drivers.picoscope.stop_capture(capture_handles.pico_capture_id)
+        await self._drivers.mircat.stop_recipe()
+        await self._drivers.mircat.disarm()
+        await self._drivers.t660_slave.stop_outputs()
+        await self._drivers.t660_master.stop_outputs()
 
 
 async def _collect_driver_statuses(drivers: SupportedV1DriverBundle) -> tuple[DeviceStatus, ...]:

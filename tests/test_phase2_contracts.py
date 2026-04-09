@@ -27,9 +27,12 @@ from ircp_contracts import (
     RawDataArtifact,
     RunEvent,
     RunEventType,
+    RunFailureReason,
+    RunOutcomeSummary,
     RunPhase,
     SessionManifest,
     SessionStatus,
+    SessionStatusTimestamp,
     T660MasterTimingConfiguration,
     T660SlaveTimingConfiguration,
     TimeToWavenumberMapping,
@@ -49,7 +52,7 @@ from ircp_contracts import (
     MircatSpectralMode,
     MircatSweepScan,
 )
-from ircp_experiment_engine.runtime import build_pump_probe_summary, build_timing_summary
+from ircp_experiment_engine.runtime import build_fault, build_pump_probe_summary, build_timing_summary
 
 
 def _build_recipe(*, with_mapping: bool = True) -> ExperimentRecipe:
@@ -242,6 +245,16 @@ class Phase3BContractTests(unittest.TestCase):
             pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
             time_to_wavenumber_mapping=recipe.time_to_wavenumber_mapping,
             device_status_snapshot=(status,),
+            status_timestamps=(
+                SessionStatusTimestamp(status=SessionStatus.PLANNED, recorded_at=now),
+                SessionStatusTimestamp(status=SessionStatus.ACTIVE, recorded_at=now),
+                SessionStatusTimestamp(status=SessionStatus.COMPLETED, recorded_at=now),
+            ),
+            outcome=RunOutcomeSummary(
+                started_at=now,
+                ended_at=now,
+                final_event_id="event-1",
+            ),
         )
 
         self.assertEqual(manifest.validate_provenance(), ())
@@ -297,7 +310,106 @@ class Phase3BContractTests(unittest.TestCase):
                 pico_capture_snapshot=recipe.pico_secondary_capture,
                 pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
                 time_to_wavenumber_mapping=recipe.time_to_wavenumber_mapping,
+                status_timestamps=(
+                    SessionStatusTimestamp(status=SessionStatus.PLANNED, recorded_at=now),
+                    SessionStatusTimestamp(status=SessionStatus.ACTIVE, recorded_at=now),
+                    SessionStatusTimestamp(status=SessionStatus.COMPLETED, recorded_at=now),
+                ),
+                outcome=RunOutcomeSummary(
+                    started_at=now,
+                    ended_at=now,
+                    final_event_id="event-1",
+                ),
             )
+
+    def test_faulted_session_accepts_partial_primary_raw_with_explicit_failure_reason(self) -> None:
+        now = datetime.now(timezone.utc)
+        recipe = _build_recipe()
+        primary_raw = RawDataArtifact(
+            artifact_id="raw-hf2-partial-1",
+            session_id="session-faulted-1",
+            device_kind=DeviceKind.LABONE_HF2LI,
+            stream_name="hf2.demod0.r",
+            relative_path="raw/hf2/demod0_r_partial.txt",
+            created_at=now,
+            source_role=ArtifactSourceRole.PRIMARY_RAW,
+            registered_by_event_id="event-raw-1",
+        )
+        fault = build_fault(
+            fault_id="fault-1",
+            device_id="hf2li-primary",
+            device_kind=DeviceKind.LABONE_HF2LI,
+            code="hf2_capture_overload",
+            message="HF2 capture faulted during the run.",
+            vendor_code="LABONE:OVERLOAD",
+            vendor_message="Simulated overload.",
+        )
+        raw_event = RunEvent(
+            event_id="event-raw-1",
+            run_id="run-faulted-1",
+            event_type=RunEventType.RAW_ARTIFACT_REGISTERED,
+            emitted_at=now,
+            source="data-pipeline",
+            message="Partial HF2 raw artifact registered.",
+            phase=RunPhase.RUNNING,
+            session_id="session-faulted-1",
+            timing_summary=build_timing_summary(recipe),
+            pump_probe_summary=build_pump_probe_summary(recipe),
+            selected_markers=recipe.timing.selected_digital_markers,
+        )
+        fault_event = RunEvent(
+            event_id="event-fault-1",
+            run_id="run-faulted-1",
+            event_type=RunEventType.DEVICE_FAULT_REPORTED,
+            emitted_at=now,
+            source="experiment-engine",
+            message=fault.message,
+            phase=RunPhase.FAULTED,
+            session_id="session-faulted-1",
+            device_fault=fault,
+            failure_reason=RunFailureReason.DEVICE_FAULT,
+            timing_summary=build_timing_summary(recipe),
+            pump_probe_summary=build_pump_probe_summary(recipe),
+            selected_markers=recipe.timing.selected_digital_markers,
+        )
+
+        manifest = SessionManifest(
+            session_id="session-faulted-1",
+            version="phase3b.v1",
+            created_at=now,
+            updated_at=now,
+            status=SessionStatus.FAULTED,
+            recipe_snapshot=recipe,
+            device_config_snapshot=(),
+            calibration_references=recipe.calibration_references,
+            raw_artifacts=(primary_raw,),
+            event_timeline=(raw_event, fault_event),
+            processing_outputs=(),
+            analysis_outputs=(),
+            export_artifacts=(),
+            timing_summary=build_timing_summary(recipe),
+            pump_probe_summary=build_pump_probe_summary(recipe),
+            selected_markers=tuple(marker.value for marker in recipe.timing.selected_digital_markers),
+            mux_route_snapshot=recipe.mux_route_selection,
+            mux_summary=summarize_mux_routes(recipe.mux_route_selection),
+            pico_capture_snapshot=recipe.pico_secondary_capture,
+            pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
+            time_to_wavenumber_mapping=recipe.time_to_wavenumber_mapping,
+            status_timestamps=(
+                SessionStatusTimestamp(status=SessionStatus.PLANNED, recorded_at=now),
+                SessionStatusTimestamp(status=SessionStatus.ACTIVE, recorded_at=now),
+                SessionStatusTimestamp(status=SessionStatus.FAULTED, recorded_at=now),
+            ),
+            outcome=RunOutcomeSummary(
+                started_at=now,
+                ended_at=now,
+                failure_reason=RunFailureReason.DEVICE_FAULT,
+                latest_fault=fault,
+                final_event_id="event-fault-1",
+            ),
+        )
+
+        self.assertEqual(manifest.validate_provenance(), ())
 
 
 if __name__ == "__main__":

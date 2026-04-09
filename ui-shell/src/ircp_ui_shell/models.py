@@ -106,6 +106,9 @@ class SessionSummaryCard:
     processed_artifact_count: int
     analysis_artifact_count: int
     export_artifact_count: int
+    event_count: int = 0
+    replay_ready: bool = False
+    failure_reason_label: str | None = None
     selected: bool = False
 
 
@@ -157,6 +160,8 @@ class ResultsPageModel:
     sessions: tuple[SessionSummaryCard, ...]
     selected_session: SessionSummaryCard | None
     detail_panels: tuple[SummaryPanel, ...]
+    artifact_panels: tuple[SummaryPanel, ...] = ()
+    event_log: tuple[EventLogItem, ...] = ()
 
 
 @dataclass(frozen=True)

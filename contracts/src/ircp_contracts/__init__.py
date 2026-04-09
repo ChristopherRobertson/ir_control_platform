@@ -71,6 +71,7 @@ from .run import (
     ReadinessCheck,
     RunCommand,
     RunEvent,
+    RunOutcomeSummary,
     RunState,
     TimingSummary,
     TimingSummaryEntry,
@@ -84,6 +85,7 @@ from .session import (
     ProcessedArtifact,
     RawDataArtifact,
     SessionManifest,
+    SessionStatusTimestamp,
 )
 
 __all__ = [
@@ -145,10 +147,12 @@ __all__ = [
     "RunEvent",
     "RunEventType",
     "RunFailureReason",
+    "RunOutcomeSummary",
     "RunPhase",
     "RunState",
     "SessionManifest",
     "SessionStatus",
+    "SessionStatusTimestamp",
     "T660MasterTimingConfiguration",
     "T660SlaveTimingConfiguration",
     "TimeToWavenumberMapping",

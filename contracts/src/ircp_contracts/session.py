@@ -27,9 +27,17 @@ from .run import (
     MuxRoutingSummary,
     PicoCaptureSummary,
     PumpProbeAcquisitionSummary,
+    RunOutcomeSummary,
     RunEvent,
     TimingSummary,
 )
+
+
+@dataclass(frozen=True)
+class SessionStatusTimestamp:
+    status: SessionStatus
+    recorded_at: datetime
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,7 @@ class RawDataArtifact:
     source_role: ArtifactSourceRole = ArtifactSourceRole.PRIMARY_RAW
     mux_output_target: str | None = None
     related_marker: str | None = None
+    registered_by_event_id: str | None = None
     metadata: Mapping[str, ConfigurationScalar] = field(default_factory=dict)
     artifact_kind: ArtifactKind = ArtifactKind.RAW
 
@@ -62,6 +71,7 @@ class ProcessedArtifact:
     created_at: datetime
     version: str = CONTRACT_VERSION
     content_type: str = "text/plain"
+    registered_by_event_id: str | None = None
     metadata: Mapping[str, ConfigurationScalar] = field(default_factory=dict)
     artifact_kind: ArtifactKind = ArtifactKind.PROCESSED
 
@@ -82,6 +92,7 @@ class AnalysisArtifact:
     source_raw_artifact_ids: tuple[str, ...] = ()
     version: str = CONTRACT_VERSION
     content_type: str = "text/plain"
+    registered_by_event_id: str | None = None
     metadata: Mapping[str, ConfigurationScalar] = field(default_factory=dict)
     artifact_kind: ArtifactKind = ArtifactKind.ANALYSIS
 
@@ -101,6 +112,7 @@ class ExportArtifact:
     created_at: datetime
     version: str = CONTRACT_VERSION
     content_type: str = "application/octet-stream"
+    registered_by_event_id: str | None = None
     metadata: Mapping[str, ConfigurationScalar] = field(default_factory=dict)
     artifact_kind: ArtifactKind = ArtifactKind.EXPORT
 
@@ -134,6 +146,8 @@ class SessionManifest:
     time_to_wavenumber_mapping: TimeToWavenumberMapping | None
     preset_snapshot: ExperimentPreset | None = None
     device_status_snapshot: tuple[DeviceStatus, ...] = ()
+    status_timestamps: tuple[SessionStatusTimestamp, ...] = ()
+    outcome: RunOutcomeSummary = field(default_factory=RunOutcomeSummary)
     reopened_from_session_id: str | None = None
     notes: tuple[str, ...] = ()
 
@@ -164,8 +178,15 @@ class SessionManifest:
             if artifact.source_role == ArtifactSourceRole.SECONDARY_MONITOR
         )
 
+    def event_ids(self) -> tuple[str, ...]:
+        return tuple(event.event_id for event in self.event_timeline)
+
+    def replay_ready(self) -> bool:
+        return bool(self.primary_raw_artifacts())
+
     def validate_provenance(self) -> tuple[str, ...]:
         errors: list[str] = []
+        event_ids = set(self.event_ids())
         raw_ids = {artifact.artifact_id for artifact in self.raw_artifacts}
         processed_ids = {artifact.artifact_id for artifact in self.processing_outputs}
         all_source_ids = raw_ids | processed_ids | {
@@ -189,6 +210,14 @@ class SessionManifest:
                 errors.append(
                     f"Secondary monitor artifact {artifact.artifact_id} must originate from the PicoScope."
                 )
+            if (
+                artifact.registered_by_event_id is not None
+                and artifact.registered_by_event_id not in event_ids
+            ):
+                errors.append(
+                    f"Raw artifact {artifact.artifact_id} references missing registration event "
+                    f"{artifact.registered_by_event_id}."
+                )
 
         if self.status == SessionStatus.COMPLETED and not primary_raw:
             errors.append("Completed sessions must preserve at least one HF2LI primary raw artifact.")
@@ -202,6 +231,14 @@ class SessionManifest:
             if missing:
                 errors.append(
                     f"Processed artifact {artifact.artifact_id} references missing raw inputs: {missing}."
+                )
+            if (
+                artifact.registered_by_event_id is not None
+                and artifact.registered_by_event_id not in event_ids
+            ):
+                errors.append(
+                    f"Processed artifact {artifact.artifact_id} references missing registration event "
+                    f"{artifact.registered_by_event_id}."
                 )
 
         for artifact in self.analysis_outputs:
@@ -219,6 +256,14 @@ class SessionManifest:
                 errors.append(
                     f"Analysis artifact {artifact.artifact_id} references missing raw inputs: {missing_raw}."
                 )
+            if (
+                artifact.registered_by_event_id is not None
+                and artifact.registered_by_event_id not in event_ids
+            ):
+                errors.append(
+                    f"Analysis artifact {artifact.artifact_id} references missing registration event "
+                    f"{artifact.registered_by_event_id}."
+                )
 
         for artifact in self.export_artifacts:
             if artifact.session_id != self.session_id:
@@ -228,5 +273,53 @@ class SessionManifest:
                 errors.append(
                     f"Export artifact {artifact.artifact_id} references missing source artifacts: {missing}."
                 )
+            if (
+                artifact.registered_by_event_id is not None
+                and artifact.registered_by_event_id not in event_ids
+            ):
+                errors.append(
+                    f"Export artifact {artifact.artifact_id} references missing registration event "
+                    f"{artifact.registered_by_event_id}."
+                )
+
+        if not self.status_timestamps:
+            errors.append("Session manifests must record status timestamps from creation onward.")
+        else:
+            previous_time = self.created_at
+            for timestamp in self.status_timestamps:
+                if timestamp.recorded_at < previous_time:
+                    errors.append("Session status timestamps must be chronological.")
+                    break
+                previous_time = timestamp.recorded_at
+            if self.status_timestamps[-1].status != self.status:
+                errors.append("The latest recorded session status must match the manifest status.")
+
+        if self.outcome.final_event_id is not None and self.outcome.final_event_id not in event_ids:
+            errors.append(
+                f"Session outcome references missing final event {self.outcome.final_event_id}."
+            )
+        if self.reopened_from_session_id == self.session_id:
+            errors.append("A session cannot reopen from itself.")
+        if self.outcome.started_at is not None and self.outcome.started_at < self.created_at:
+            errors.append("Session outcome start time cannot precede session creation.")
+        if self.status == SessionStatus.ACTIVE and self.outcome.ended_at is not None:
+            errors.append("Active sessions cannot already have an end time.")
+        if self.status == SessionStatus.COMPLETED:
+            if self.outcome.ended_at is None:
+                errors.append("Completed sessions must record when the run ended.")
+            if self.outcome.failure_reason is not None:
+                errors.append("Completed sessions must not carry a failure reason.")
+            if self.outcome.latest_fault is not None:
+                errors.append("Completed sessions must not carry a terminal device fault.")
+        if self.status == SessionStatus.FAULTED:
+            if self.outcome.ended_at is None:
+                errors.append("Faulted sessions must record when the run ended.")
+            if self.outcome.failure_reason is None:
+                errors.append("Faulted sessions must record an explicit failure reason.")
+        if self.status == SessionStatus.ABORTED:
+            if self.outcome.ended_at is None:
+                errors.append("Aborted sessions must record when the run ended.")
+            if self.outcome.failure_reason is None:
+                errors.append("Aborted sessions must record an explicit abort reason.")
 
         return tuple(errors)

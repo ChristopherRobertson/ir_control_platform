@@ -100,6 +100,8 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         selected = next(card for card in results_page.sessions if card.session_id == run_state.session_id)
         self.assertGreaterEqual(selected.primary_raw_artifact_count, 1)
         self.assertGreaterEqual(selected.secondary_monitor_artifact_count, 1)
+        self.assertGreater(len(results_page.artifact_panels), 0)
+        self.assertGreater(len(results_page.event_log), 0)
 
     def test_faulted_scenario_surfaces_fault_page_state(self) -> None:
         runtimes = create_phase3b_runtime_map()
@@ -127,6 +129,8 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertIsNotNone(results_page.selected_session)
         self.assertEqual(results_page.selected_session.session_id, "saved-session-001")
         self.assertGreater(len(results_page.detail_panels), 0)
+        self.assertGreater(len(results_page.artifact_panels), 0)
+        self.assertGreater(len(results_page.event_log), 0)
 
     def test_wsgi_start_flow_updates_run_route(self) -> None:
         app = create_phase3b_simulator_app()

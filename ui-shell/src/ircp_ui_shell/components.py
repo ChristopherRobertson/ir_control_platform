@@ -309,6 +309,12 @@ def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
     details = "".join(render_summary_panel(panel) for panel in page.detail_panels) or (
         '<div class="small">Select a session to inspect the persisted manifest summary.</div>'
     )
+    artifacts = "".join(render_summary_panel(panel) for panel in page.artifact_panels) or (
+        '<div class="small">Persisted artifact groups will appear once a session is selected.</div>'
+    )
+    events = "".join(render_event_row(item) for item in page.event_log) or (
+        '<div class="small">The persisted session timeline is empty for this selection.</div>'
+    )
     return f"""
     <section class="panel">
       <h2>{escape(page.title)}</h2>
@@ -326,6 +332,14 @@ def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
         <p class="panel-subtitle">Reopen happens through the session and replay boundaries only.</p>
         {details}
       </div>
+    </section>
+    <section class="section-grid">
+      {artifacts}
+    </section>
+    <section class="panel">
+      <h3>Persisted Event Timeline</h3>
+      <p class="panel-subtitle">Results reads saved run events instead of relying on live runtime state.</p>
+      {events}
     </section>"""
 
 
@@ -457,13 +471,25 @@ def render_run_step(step: RunStepSummary) -> str:
 
 def render_session_card(card: SessionSummaryCard, scenario_id: str) -> str:
     selected = " active" if card.selected else ""
+    tone = {
+        "Completed": "good",
+        "Faulted": "bad",
+        "Aborted": "warn",
+    }.get(card.status_label, "neutral")
+    failure_reason = (
+        f'<div class="small">Failure reason: {escape(card.failure_reason_label)}</div>'
+        if card.failure_reason_label
+        else ""
+    )
     return f"""
     <div class="session-card">
       <strong>{escape(card.recipe_title)}</strong>
-      <div><span class="status-label{' good' if card.status_label == 'Completed' else 'neutral'}">{escape(card.status_label)}</span></div>
+      <div><span class="status-label {tone}">{escape(card.status_label)}</span></div>
       <div class="small">Session {escape(card.session_id)} updated {escape(card.updated_at.isoformat())}</div>
       <div class="small">Primary raw {card.primary_raw_artifact_count} | Secondary monitor {card.secondary_monitor_artifact_count}</div>
       <div class="small">Processed {card.processed_artifact_count} | Analysis {card.analysis_artifact_count} | Export {card.export_artifact_count}</div>
+      <div class="small">Events {card.event_count} | Replay {'ready' if card.replay_ready else 'unavailable'}</div>
+      {failure_reason}
       <div class="panel-actions">
         <form method="post" action="/results/reopen">
           <input type="hidden" name="scenario" value="{escape(scenario_id)}">

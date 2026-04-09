@@ -68,6 +68,25 @@ class PicoCaptureSummary:
 
 
 @dataclass(frozen=True)
+class RunOutcomeSummary:
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    failure_reason: RunFailureReason | None = None
+    latest_fault: DeviceFault | None = None
+    final_event_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.started_at is not None and self.ended_at is not None and self.ended_at < self.started_at:
+            raise ValueError("Run outcome end time cannot precede start time.")
+        if self.latest_fault is not None and self.failure_reason not in {
+            None,
+            RunFailureReason.DEVICE_FAULT,
+            RunFailureReason.PERSISTENCE_FAILED,
+        }:
+            raise ValueError("Run outcome faults must use a fault-compatible failure reason.")
+
+
+@dataclass(frozen=True)
 class ValidationIssue:
     code: str
     severity: ValidationSeverity
