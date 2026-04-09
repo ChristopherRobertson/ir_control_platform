@@ -1,28 +1,26 @@
 """Experiment-engine service boundaries."""
 
 from .boundaries import (
-    GoldenPathDriverBundle,
     LiveDataPoint,
     PreflightValidator,
     RunCoordinator,
     RunMonitor,
     RunTimeline,
+    SupportedV1DriverBundle,
 )
 from .runtime import (
-    GoldenPathPreflightValidator,
     InMemoryRunCoordinator,
     RawArtifactTemplate,
     RunEventTemplate,
     RunExecutionPlan,
     RunStepTemplate,
     StepOutcome,
+    SupportedV1PreflightValidator,
     build_fault,
     build_live_data_points,
 )
 
 __all__ = [
-    "GoldenPathDriverBundle",
-    "GoldenPathPreflightValidator",
     "InMemoryRunCoordinator",
     "LiveDataPoint",
     "PreflightValidator",
@@ -34,6 +32,8 @@ __all__ = [
     "RunStepTemplate",
     "RunTimeline",
     "StepOutcome",
+    "SupportedV1DriverBundle",
+    "SupportedV1PreflightValidator",
     "build_fault",
     "build_live_data_points",
 ]

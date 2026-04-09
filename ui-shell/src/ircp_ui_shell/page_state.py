@@ -9,9 +9,11 @@ from enum import Enum
 class PageStateKind(str, Enum):
     LOADING = "loading"
     BLOCKED = "blocked"
+    WARNING = "warning"
     FAULT = "fault"
     EMPTY = "empty"
     UNAVAILABLE = "unavailable"
+    RECOVERY = "recovery"
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,10 @@ def blocked_state(title: str, message: str, details: tuple[str, ...] = ()) -> Pa
     return PageStateModel(kind=PageStateKind.BLOCKED, title=title, message=message, details=details)
 
 
+def warning_state(title: str, message: str, details: tuple[str, ...] = ()) -> PageStateModel:
+    return PageStateModel(kind=PageStateKind.WARNING, title=title, message=message, details=details)
+
+
 def fault_state(title: str, message: str, details: tuple[str, ...] = ()) -> PageStateModel:
     return PageStateModel(kind=PageStateKind.FAULT, title=title, message=message, details=details)
 
@@ -45,3 +51,7 @@ def unavailable_state(title: str, message: str, details: tuple[str, ...] = ()) -
         message=message,
         details=details,
     )
+
+
+def recovery_state(title: str, message: str, details: tuple[str, ...] = ()) -> PageStateModel:
+    return PageStateModel(kind=PageStateKind.RECOVERY, title=title, message=message, details=details)

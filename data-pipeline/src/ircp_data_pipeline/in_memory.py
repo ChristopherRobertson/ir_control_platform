@@ -1,4 +1,4 @@
-"""In-memory session persistence for Phase 3A simulator workflows."""
+"""In-memory session persistence for the Phase 3B simulator workflows."""
 
 from __future__ import annotations
 
@@ -14,11 +14,19 @@ from ircp_contracts import (
     ExperimentPreset,
     ExperimentRecipe,
     ExportArtifact,
+    MuxRouteSelection,
+    MuxRoutingSummary,
+    PicoCaptureSummary,
+    PicoSecondaryCapture,
     ProcessedArtifact,
+    PumpProbeAcquisitionSummary,
     RawDataArtifact,
     RunEvent,
     SessionManifest,
     SessionStatus,
+    TimeToWavenumberMapping,
+    TimingMarker,
+    TimingSummary,
 )
 
 from .boundaries import (
@@ -37,7 +45,7 @@ def _utc_now() -> datetime:
 
 
 class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
-    """Authoritative session store for the Phase 3A simulator slice."""
+    """Authoritative session store for the Phase 3B simulator slice."""
 
     def __init__(self, initial_manifests: tuple[SessionManifest, ...] = ()) -> None:
         self._manifests = {manifest.session_id: manifest for manifest in initial_manifests}
@@ -50,6 +58,14 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
         calibration_references: tuple[CalibrationReference, ...],
         device_config_snapshot: tuple[DeviceConfiguration, ...],
         device_status_snapshot: tuple[DeviceStatus, ...],
+        timing_summary: TimingSummary,
+        pump_probe_summary: PumpProbeAcquisitionSummary,
+        selected_markers: tuple[TimingMarker, ...],
+        mux_route_snapshot: MuxRouteSelection,
+        mux_summary: MuxRoutingSummary,
+        pico_capture_snapshot: PicoSecondaryCapture,
+        pico_summary: PicoCaptureSummary,
+        time_to_wavenumber_mapping: TimeToWavenumberMapping | None,
     ) -> SessionManifest:
         self._counter += 1
         now = _utc_now()
@@ -68,11 +84,36 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
             processing_outputs=(),
             analysis_outputs=(),
             export_artifacts=(),
+            timing_summary=timing_summary,
+            pump_probe_summary=pump_probe_summary,
+            selected_markers=tuple(marker.value for marker in selected_markers),
+            mux_route_snapshot=mux_route_snapshot,
+            mux_summary=mux_summary,
+            pico_capture_snapshot=pico_capture_snapshot,
+            pico_summary=pico_summary,
+            time_to_wavenumber_mapping=time_to_wavenumber_mapping,
             preset_snapshot=preset,
             device_status_snapshot=device_status_snapshot,
         )
         self._manifests[session_id] = manifest
         return manifest
+
+    async def update_device_snapshots(
+        self,
+        session_id: str,
+        *,
+        device_config_snapshot: tuple[DeviceConfiguration, ...] | None = None,
+        device_status_snapshot: tuple[DeviceStatus, ...] | None = None,
+    ) -> SessionManifest:
+        manifest = self._require_manifest(session_id)
+        updated = replace(
+            manifest,
+            updated_at=max(_utc_now(), manifest.updated_at),
+            device_config_snapshot=device_config_snapshot or manifest.device_config_snapshot,
+            device_status_snapshot=device_status_snapshot or manifest.device_status_snapshot,
+        )
+        self._manifests[session_id] = updated
+        return updated
 
     async def append_event(self, session_id: str, event: RunEvent) -> SessionManifest:
         manifest = self._require_manifest(session_id)
@@ -144,10 +185,13 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
 
     async def open_session(self, request: SessionOpenRequest) -> SessionOpenResult:
         manifest = self._require_manifest(request.session_id)
+        primary = manifest.primary_raw_artifacts()
+        secondary = manifest.secondary_monitor_artifacts()
         return SessionOpenResult(
             manifest=manifest,
-            replay_ready=bool(manifest.raw_artifacts),
-            raw_artifact_ids=tuple(artifact.artifact_id for artifact in manifest.raw_artifacts),
+            replay_ready=bool(primary),
+            primary_raw_artifact_ids=tuple(artifact.artifact_id for artifact in primary),
+            secondary_monitor_artifact_ids=tuple(artifact.artifact_id for artifact in secondary),
             processed_artifact_ids=tuple(
                 artifact.artifact_id for artifact in manifest.processing_outputs
             ),
@@ -157,7 +201,12 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
         manifest = self._require_manifest(session_id)
         return ReplayPlan(
             session_id=session_id,
-            raw_artifact_ids=tuple(artifact.artifact_id for artifact in manifest.raw_artifacts),
+            primary_raw_artifact_ids=tuple(
+                artifact.artifact_id for artifact in manifest.primary_raw_artifacts()
+            ),
+            secondary_monitor_artifact_ids=tuple(
+                artifact.artifact_id for artifact in manifest.secondary_monitor_artifacts()
+            ),
             processed_artifact_ids=tuple(
                 artifact.artifact_id for artifact in manifest.processing_outputs
             ),
@@ -180,7 +229,8 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
                 created_at=manifest.created_at,
                 updated_at=manifest.updated_at,
                 status=manifest.status,
-                raw_artifact_count=len(manifest.raw_artifacts),
+                primary_raw_artifact_count=len(manifest.primary_raw_artifacts()),
+                secondary_monitor_artifact_count=len(manifest.secondary_monitor_artifacts()),
                 processed_artifact_count=len(manifest.processing_outputs),
                 analysis_artifact_count=len(manifest.analysis_outputs),
                 export_artifact_count=len(manifest.export_artifacts),

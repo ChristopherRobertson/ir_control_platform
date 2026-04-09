@@ -26,6 +26,7 @@ from .models import (
     SessionSummaryCard,
     SetupPageModel,
     StatusBadge,
+    SummaryPanel,
 )
 from .page_state import PageStateKind, PageStateModel
 
@@ -51,6 +52,7 @@ __all__ = [
     "SessionSummaryCard",
     "SetupPageModel",
     "StatusBadge",
+    "SummaryPanel",
     "UiCommandService",
     "UiQueryService",
     "UiRuntimeGateway",

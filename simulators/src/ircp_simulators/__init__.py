@@ -1,11 +1,11 @@
 """Simulator service boundaries."""
 
-from .boundaries import GoldenPathSimulatorBundle, SimulatorCatalog
-from .golden_path import Phase3AScenarioContext, Phase3ASimulatorCatalog
+from .boundaries import SimulatorCatalog, SupportedV1SimulatorBundle
+from .golden_path import Phase3BScenarioContext, SupportedV1SimulatorCatalog
 
 __all__ = [
-    "GoldenPathSimulatorBundle",
-    "Phase3AScenarioContext",
-    "Phase3ASimulatorCatalog",
+    "Phase3BScenarioContext",
     "SimulatorCatalog",
+    "SupportedV1SimulatorBundle",
+    "SupportedV1SimulatorCatalog",
 ]

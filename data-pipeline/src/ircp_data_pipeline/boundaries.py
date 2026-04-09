@@ -14,11 +14,19 @@ from ircp_contracts import (
     ExperimentPreset,
     ExperimentRecipe,
     ExportArtifact,
+    MuxRouteSelection,
+    MuxRoutingSummary,
+    PicoCaptureSummary,
+    PicoSecondaryCapture,
     ProcessedArtifact,
+    PumpProbeAcquisitionSummary,
     RawDataArtifact,
     RunEvent,
     SessionManifest,
     SessionStatus,
+    TimeToWavenumberMapping,
+    TimingSummary,
+    TimingMarker,
 )
 
 
@@ -33,14 +41,16 @@ class SessionOpenRequest:
 class SessionOpenResult:
     manifest: SessionManifest
     replay_ready: bool
-    raw_artifact_ids: tuple[str, ...]
+    primary_raw_artifact_ids: tuple[str, ...]
+    secondary_monitor_artifact_ids: tuple[str, ...]
     processed_artifact_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class ReplayPlan:
     session_id: str
-    raw_artifact_ids: tuple[str, ...]
+    primary_raw_artifact_ids: tuple[str, ...]
+    secondary_monitor_artifact_ids: tuple[str, ...]
     processed_artifact_ids: tuple[str, ...]
     analysis_artifact_ids: tuple[str, ...]
 
@@ -53,7 +63,8 @@ class SessionSummary:
     created_at: datetime
     updated_at: datetime
     status: SessionStatus
-    raw_artifact_count: int
+    primary_raw_artifact_count: int
+    secondary_monitor_artifact_count: int
     processed_artifact_count: int
     analysis_artifact_count: int
     export_artifact_count: int
@@ -68,8 +79,25 @@ class SessionStore(Protocol):
         calibration_references: tuple[CalibrationReference, ...],
         device_config_snapshot: tuple[DeviceConfiguration, ...],
         device_status_snapshot: tuple[DeviceStatus, ...],
+        timing_summary: TimingSummary,
+        pump_probe_summary: PumpProbeAcquisitionSummary,
+        selected_markers: tuple[TimingMarker, ...],
+        mux_route_snapshot: MuxRouteSelection,
+        mux_summary: MuxRoutingSummary,
+        pico_capture_snapshot: PicoSecondaryCapture,
+        pico_summary: PicoCaptureSummary,
+        time_to_wavenumber_mapping: TimeToWavenumberMapping | None,
     ) -> SessionManifest:
         """Create the authoritative session record before run completion."""
+
+    async def update_device_snapshots(
+        self,
+        session_id: str,
+        *,
+        device_config_snapshot: tuple[DeviceConfiguration, ...] | None = None,
+        device_status_snapshot: tuple[DeviceStatus, ...] | None = None,
+    ) -> SessionManifest:
+        """Replace authoritative device snapshots for a persisted session."""
 
     async def append_event(self, session_id: str, event: RunEvent) -> SessionManifest:
         """Persist one run event onto the session timeline."""
@@ -100,7 +128,7 @@ class SessionReplayer(Protocol):
         """Reopen a persisted session without live hardware dependencies."""
 
     async def build_replay_plan(self, session_id: str) -> ReplayPlan:
-        """Build the replay or session-reopen inputs from persisted artifacts only."""
+        """Build replay or reopen inputs from persisted artifacts only."""
 
 
 @runtime_checkable

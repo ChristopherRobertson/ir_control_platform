@@ -1,4 +1,4 @@
-"""Phase 3A UI foundation and simulator-backed runtime tests."""
+"""Phase 3B UI foundation and supported-v1 simulator runtime tests."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from wsgiref.util import setup_testing_defaults
 
 from _path_setup import ROOT  # noqa: F401
 from ircp_contracts import RunPhase
-from ircp_platform import create_phase3a_runtime_map, create_phase3a_simulator_app
+from ircp_platform import create_phase3b_runtime_map, create_phase3b_simulator_app
 from ircp_ui_shell.page_state import PageStateKind
 
 
@@ -49,33 +49,41 @@ def _call_wsgi(
     )
 
 
-class Phase3AUiFoundationTests(unittest.TestCase):
+class Phase3BUiFoundationTests(unittest.TestCase):
     def test_root_redirects_to_setup(self) -> None:
-        app = create_phase3a_simulator_app()
+        app = create_phase3b_simulator_app()
         status, headers, _body = _call_wsgi(app, method="GET", path="/")
 
         self.assertEqual(status, "303 See Other")
         self.assertEqual(headers["Location"], "/setup?scenario=nominal")
 
-    def test_setup_route_renders_nominal_preflight_shell(self) -> None:
-        app = create_phase3a_simulator_app()
+    def test_setup_route_renders_supported_v1_summary(self) -> None:
+        app = create_phase3b_simulator_app()
         status, _headers, body = _call_wsgi(app, method="GET", path="/setup?scenario=nominal")
 
         self.assertEqual(status, "200 OK")
-        self.assertIn("Preflight Summary", body)
-        self.assertIn("MIRcat sweep with HF2LI capture", body)
-        self.assertIn("Overall: ready", body)
+        self.assertIn("Supported v1 pump-probe scan", body)
+        self.assertIn("T0 Timing", body)
+        self.assertIn("Pico Secondary", body)
 
-    def test_blocked_scenario_shows_explicit_blocked_state(self) -> None:
-        runtimes = create_phase3a_runtime_map()
-        blocked_page = asyncio.run(runtimes["blocked"].get_setup_page())
+    def test_blocked_timing_scenario_shows_explicit_blocked_state(self) -> None:
+        runtimes = create_phase3b_runtime_map()
+        blocked_page = asyncio.run(runtimes["blocked_timing"].get_setup_page())
 
         self.assertIsNotNone(blocked_page.state)
         self.assertEqual(blocked_page.state.kind, PageStateKind.BLOCKED)
         self.assertIn("blocking", blocked_page.state.message.lower())
 
-    def test_nominal_start_run_materializes_timeline_and_live_data(self) -> None:
-        runtimes = create_phase3a_runtime_map()
+    def test_optional_pico_unavailability_surfaces_warning_not_block(self) -> None:
+        runtimes = create_phase3b_runtime_map()
+        setup_page = asyncio.run(runtimes["pico_optional"].get_setup_page())
+
+        self.assertIsNotNone(setup_page.state)
+        self.assertEqual(setup_page.state.kind, PageStateKind.WARNING)
+        self.assertIn("optional", setup_page.state.message.lower())
+
+    def test_nominal_start_run_materializes_primary_and_secondary_artifacts(self) -> None:
+        runtimes = create_phase3b_runtime_map()
         runtime = runtimes["nominal"]
 
         run_state = asyncio.run(runtime.start_run())
@@ -84,15 +92,18 @@ class Phase3AUiFoundationTests(unittest.TestCase):
 
         self.assertEqual(run_state.phase, RunPhase.COMPLETED)
         self.assertIsNotNone(run_state.session_id)
-        self.assertIsNotNone(run_page.run_id)
         self.assertGreaterEqual(len(run_page.run_steps), 3)
         self.assertGreater(len(run_page.event_log), 0)
-        self.assertGreater(len(run_page.live_data), 0)
+        self.assertGreater(len(run_page.primary_live_data), 0)
+        self.assertGreater(len(run_page.secondary_live_data), 0)
         self.assertTrue(any(card.session_id == run_state.session_id for card in results_page.sessions))
+        selected = next(card for card in results_page.sessions if card.session_id == run_state.session_id)
+        self.assertGreaterEqual(selected.primary_raw_artifact_count, 1)
+        self.assertGreaterEqual(selected.secondary_monitor_artifact_count, 1)
 
     def test_faulted_scenario_surfaces_fault_page_state(self) -> None:
-        runtimes = create_phase3a_runtime_map()
-        runtime = runtimes["faulted"]
+        runtimes = create_phase3b_runtime_map()
+        runtime = runtimes["faulted_hf2"]
 
         run_state = asyncio.run(runtime.start_run())
         run_page = asyncio.run(runtime.get_run_page())
@@ -102,8 +113,8 @@ class Phase3AUiFoundationTests(unittest.TestCase):
         self.assertEqual(run_page.state.kind, PageStateKind.FAULT)
         self.assertIn("fault", run_page.state.message.lower())
 
-    def test_results_reopen_uses_saved_session_fixture(self) -> None:
-        runtimes = create_phase3a_runtime_map()
+    def test_results_reopen_uses_saved_supported_v1_session_fixture(self) -> None:
+        runtimes = create_phase3b_runtime_map()
         runtime = runtimes["nominal"]
 
         manifest = asyncio.run(runtime.reopen_session("saved-session-001"))
@@ -111,12 +122,14 @@ class Phase3AUiFoundationTests(unittest.TestCase):
 
         self.assertEqual(manifest.session_id, "saved-session-001")
         self.assertEqual(manifest.status.value, "completed")
+        self.assertGreaterEqual(len(manifest.primary_raw_artifacts()), 1)
+        self.assertGreaterEqual(len(manifest.secondary_monitor_artifacts()), 1)
         self.assertIsNotNone(results_page.selected_session)
         self.assertEqual(results_page.selected_session.session_id, "saved-session-001")
-        self.assertGreater(len(results_page.manifest_details), 0)
+        self.assertGreater(len(results_page.detail_panels), 0)
 
     def test_wsgi_start_flow_updates_run_route(self) -> None:
-        app = create_phase3a_simulator_app()
+        app = create_phase3b_simulator_app()
         status, headers, _body = _call_wsgi(
             app,
             method="POST",
@@ -128,8 +141,8 @@ class Phase3AUiFoundationTests(unittest.TestCase):
 
         status, _headers, body = _call_wsgi(app, method="GET", path="/run?scenario=nominal")
         self.assertEqual(status, "200 OK")
-        self.assertIn("Run Progression", body)
-        self.assertIn("Event Timeline", body)
+        self.assertIn("Primary HF2 Live Data", body)
+        self.assertIn("Pico Monitor Shell", body)
 
     def test_ui_shell_avoids_direct_driver_and_persistence_imports(self) -> None:
         ui_root = Path(ROOT) / "ui-shell" / "src" / "ircp_ui_shell"

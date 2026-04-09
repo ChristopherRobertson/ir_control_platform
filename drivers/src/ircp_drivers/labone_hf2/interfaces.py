@@ -1,4 +1,4 @@
-"""HF2LI golden-path driver contract."""
+"""HF2LI driver contract for the supported v1 experiment slice."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from ircp_contracts import (
     DeviceConfiguration,
     DeviceKind,
     DeviceStatus,
-    HF2AcquisitionRecipe,
+    HF2PrimaryAcquisition,
     HF2SampleComponent,
 )
 
@@ -42,14 +42,18 @@ class HF2CaptureHandle:
 
 
 @runtime_checkable
-class LabOneHF2Driver(DeviceDriver[HF2CapabilityProfile, HF2AcquisitionRecipe], Protocol):
+class LabOneHF2Driver(DeviceDriver[HF2CapabilityProfile, HF2PrimaryAcquisition], Protocol):
     device_kind: DeviceKind
 
-    async def start_capture(self, recipe: HF2AcquisitionRecipe, session_id: str) -> HF2CaptureHandle:
-        """Start raw acquisition for the approved HF2LI stream selection surface."""
+    async def start_capture(
+        self,
+        recipe: HF2PrimaryAcquisition,
+        session_id: str,
+    ) -> HF2CaptureHandle:
+        """Start primary HF2LI acquisition for the supported-v1 run."""
 
     async def stop_capture(self, capture_id: str) -> DeviceStatus:
-        """Stop an active raw acquisition and return normalized status."""
+        """Stop an active primary HF2LI acquisition and return normalized status."""
 
     async def zero_demod_phase(self, demod_index: int) -> DeviceStatus:
         """Run the explicit phase-zero expert action for one demodulator."""

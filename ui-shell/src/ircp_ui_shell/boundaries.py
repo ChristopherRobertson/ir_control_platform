@@ -88,8 +88,11 @@ class UiSubscriptionService(Protocol):
     async def get_run_events(self, run_id: str) -> tuple[EventLogItem, ...]:
         """Return the current event log projection for one run."""
 
-    async def get_live_data(self, run_id: str) -> tuple[LiveDataSeries, ...]:
-        """Return the current live-data projection for one run."""
+    async def get_live_data(
+        self,
+        run_id: str,
+    ) -> tuple[tuple[LiveDataSeries, ...], tuple[LiveDataSeries, ...]]:
+        """Return primary and secondary live-data projections for one run."""
 
     async def get_run_steps(self, run_id: str) -> tuple[RunStepSummary, ...]:
         """Return the explicit run-state progression for one run."""
@@ -97,4 +100,4 @@ class UiSubscriptionService(Protocol):
 
 @runtime_checkable
 class UiRuntimeGateway(UiQueryService, UiCommandService, UiSubscriptionService, Protocol):
-    """Combined UI runtime surface for the Phase 3A shell."""
+    """Combined UI runtime surface for the Phase 3B shell."""

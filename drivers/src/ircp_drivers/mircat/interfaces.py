@@ -1,11 +1,20 @@
-"""MIRcat golden-path driver contract."""
+"""MIRcat driver contract for the supported v1 experiment slice."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from ircp_contracts import DeviceCapability, DeviceConfiguration, DeviceKind, DeviceStatus, MircatLaserMode, MircatSweepRecipe
+from ircp_contracts import (
+    DeviceCapability,
+    DeviceConfiguration,
+    DeviceKind,
+    DeviceStatus,
+    MircatEmissionMode,
+    MircatExperimentConfiguration,
+    MircatSpectralMode,
+    ProbeTimingMode,
+)
 
 from ..base import DeviceDriver
 
@@ -13,35 +22,42 @@ from ..base import DeviceDriver
 @dataclass(frozen=True)
 class MircatCapabilityProfile:
     capability: DeviceCapability
-    supported_laser_modes: tuple[MircatLaserMode, ...] = (
-        MircatLaserMode.PULSED,
-        MircatLaserMode.CW,
-        MircatLaserMode.CW_MODULATION,
+    supported_emission_modes: tuple[MircatEmissionMode, ...] = (
+        MircatEmissionMode.PULSED,
+        MircatEmissionMode.CW,
     )
-    supported_scan_modes: tuple[str, ...] = ("sweep",)
-    supports_tune: bool = True
+    supported_spectral_modes: tuple[MircatSpectralMode, ...] = (
+        MircatSpectralMode.SINGLE_WAVELENGTH,
+        MircatSpectralMode.SWEEP_SCAN,
+        MircatSpectralMode.STEP_MEASURE_SCAN,
+        MircatSpectralMode.MULTISPECTRAL_SCAN,
+    )
+    supported_probe_timing_modes: tuple[ProbeTimingMode, ...] = (
+        ProbeTimingMode.CONTINUOUS_PROBE,
+        ProbeTimingMode.SYNCHRONIZED_PROBE,
+    )
     supports_emission_control: bool = True
-    supports_bidirectional_sweep: bool = True
 
 
 @runtime_checkable
-class MircatDriver(DeviceDriver[MircatCapabilityProfile, MircatSweepRecipe], Protocol):
+class MircatDriver(DeviceDriver[MircatCapabilityProfile, MircatExperimentConfiguration], Protocol):
     device_kind: DeviceKind
 
     async def arm(self) -> DeviceStatus:
-        """Arm MIRcat for later tune or sweep operations."""
+        """Arm MIRcat for a coordinated experiment start."""
 
     async def disarm(self) -> DeviceStatus:
         """Disarm MIRcat after an explicit stop or fault."""
 
-    async def tune_to_wavenumber(self, wavenumber_cm1: float) -> DeviceStatus:
-        """Tune MIRcat to a single wavenumber without starting a scan."""
-
     async def set_emission_enabled(self, enabled: bool) -> DeviceStatus:
-        """Turn emission on or off explicitly."""
+        """Turn MIRcat emission on or off explicitly."""
 
-    async def start_sweep(self, recipe: MircatSweepRecipe) -> DeviceStatus:
-        """Start the one approved sweep-scan path for the Phase 3 slice."""
+    async def start_recipe(
+        self,
+        configuration: MircatExperimentConfiguration,
+        probe_timing_mode: ProbeTimingMode,
+    ) -> DeviceStatus:
+        """Start the one supported-v1 MIRcat path for the configured experiment recipe."""
 
-    async def stop_sweep(self) -> DeviceStatus:
-        """Stop the active sweep scan explicitly."""
+    async def stop_recipe(self) -> DeviceStatus:
+        """Stop the active supported-v1 MIRcat path explicitly."""

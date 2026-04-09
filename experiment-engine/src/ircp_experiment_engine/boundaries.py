@@ -1,4 +1,4 @@
-"""Engine-facing orchestration boundaries for the first vertical slice."""
+"""Engine-facing orchestration boundaries for the supported v1 slice."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from ircp_contracts import (
+    ArtifactSourceRole,
     ConfigurationScalar,
     DeviceFault,
     ExperimentPreset,
@@ -17,13 +18,23 @@ from ircp_contracts import (
     RunState,
     SessionManifest,
 )
-from ircp_drivers import LabOneHF2Driver, MircatDriver
+from ircp_drivers import (
+    ArduinoMuxDriver,
+    LabOneHF2Driver,
+    MircatDriver,
+    PicoScopeDriver,
+    T660TimingDriver,
+)
 
 
 @dataclass(frozen=True)
-class GoldenPathDriverBundle:
+class SupportedV1DriverBundle:
     mircat: MircatDriver
     hf2li: LabOneHF2Driver
+    t660_master: T660TimingDriver
+    t660_slave: T660TimingDriver
+    mux: ArduinoMuxDriver
+    picoscope: PicoScopeDriver
 
 
 @dataclass(frozen=True)
@@ -31,9 +42,12 @@ class LiveDataPoint:
     sample_id: str
     captured_at: datetime
     stream_name: str
-    wavenumber_cm1: float
+    axis_label: str
+    axis_units: str
+    axis_value: float
     value: float
     units: str = "V"
+    source_role: ArtifactSourceRole = ArtifactSourceRole.PRIMARY_RAW
     metadata: dict[str, ConfigurationScalar] | None = None
 
 
@@ -51,9 +65,9 @@ class PreflightValidator(Protocol):
         self,
         recipe: ExperimentRecipe,
         preset: ExperimentPreset | None,
-        drivers: GoldenPathDriverBundle,
+        drivers: SupportedV1DriverBundle,
     ) -> PreflightReport:
-        """Evaluate the single approved preflight path for MIRcat + HF2LI."""
+        """Evaluate the supported-v1 preflight path."""
 
 
 @runtime_checkable
@@ -71,7 +85,7 @@ class RunCoordinator(Protocol):
         preset: ExperimentPreset | None,
         session_id: str,
     ) -> RunState:
-        """Start the single approved coordinated run path."""
+        """Start the canonical supported-v1 run path."""
 
     async def get_run_state(self, run_id: str) -> RunState:
         """Return the current authoritative run state."""

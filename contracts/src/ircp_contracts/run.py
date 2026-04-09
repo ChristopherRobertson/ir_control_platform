@@ -8,14 +8,63 @@ from typing import Mapping
 
 from .common import (
     ConfigurationScalar,
+    PicoMonitoringMode,
     ReadinessState,
     RunCommandType,
     RunEventType,
     RunFailureReason,
     RunPhase,
+    TimingMarker,
     ValidationSeverity,
 )
 from .device import DeviceFault
+from .experiment import (
+    AcquisitionTimingMode,
+    MuxRouteSelection,
+    PicoSecondaryCapture,
+    ProbeTimingMode,
+)
+
+
+@dataclass(frozen=True)
+class TimingSummaryEntry:
+    label: str
+    marker: TimingMarker
+    offset_ns: float
+
+
+@dataclass(frozen=True)
+class TimingSummary:
+    t0_label: str
+    master_device_id: str
+    slave_device_id: str
+    cycle_period_ns: float
+    entries: tuple[TimingSummaryEntry, ...]
+
+
+@dataclass(frozen=True)
+class PumpProbeAcquisitionSummary:
+    pump_shots_before_probe: int
+    probe_timing_mode: ProbeTimingMode
+    acquisition_timing_mode: AcquisitionTimingMode
+    acquisition_reference_marker: TimingMarker | None
+
+
+@dataclass(frozen=True)
+class MuxRoutingSummary:
+    route_set_name: str
+    channel_a: str
+    channel_b: str
+    external_trigger: str
+
+
+@dataclass(frozen=True)
+class PicoCaptureSummary:
+    mode: PicoMonitoringMode
+    trigger_marker: TimingMarker | None
+    monitor_enabled: bool
+    recording_enabled: bool
+    recorded_inputs: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -45,6 +94,11 @@ class PreflightReport:
     generated_at: datetime
     checks: tuple[ReadinessCheck, ...]
     ready_to_start: bool
+    timing_summary: TimingSummary
+    pump_probe_summary: PumpProbeAcquisitionSummary
+    selected_markers: tuple[TimingMarker, ...]
+    mux_summary: MuxRoutingSummary
+    pico_summary: PicoCaptureSummary
 
     def __post_init__(self) -> None:
         has_blocking_issue = any(
@@ -75,6 +129,11 @@ class RunState:
     active_step: str | None = None
     progress_fraction: float | None = None
     preflight: PreflightReport | None = None
+    timing_summary: TimingSummary | None = None
+    pump_probe_summary: PumpProbeAcquisitionSummary | None = None
+    selected_markers: tuple[TimingMarker, ...] = ()
+    mux_summary: MuxRoutingSummary | None = None
+    pico_summary: PicoCaptureSummary | None = None
     latest_fault: DeviceFault | None = None
     failure_reason: RunFailureReason | None = None
     last_event_id: str | None = None
@@ -98,4 +157,38 @@ class RunEvent:
     session_id: str | None = None
     device_fault: DeviceFault | None = None
     failure_reason: RunFailureReason | None = None
+    timing_summary: TimingSummary | None = None
+    pump_probe_summary: PumpProbeAcquisitionSummary | None = None
+    selected_markers: tuple[TimingMarker, ...] = ()
+    mux_summary: MuxRoutingSummary | None = None
+    pico_summary: PicoCaptureSummary | None = None
     payload: Mapping[str, ConfigurationScalar] = field(default_factory=dict)
+
+
+def summarize_mux_routes(routes: MuxRouteSelection) -> MuxRoutingSummary:
+    def _format_route(route: object) -> str:
+        selection = route
+        analog_source = getattr(selection, "analog_source", None)
+        digital_marker = getattr(selection, "digital_marker", None)
+        if analog_source is not None:
+            return str(analog_source.value)
+        if digital_marker is not None:
+            return str(digital_marker.value)
+        return "unconfigured"
+
+    return MuxRoutingSummary(
+        route_set_name=routes.route_set_name,
+        channel_a=_format_route(routes.channel_a),
+        channel_b=_format_route(routes.channel_b),
+        external_trigger=_format_route(routes.external_trigger),
+    )
+
+
+def summarize_pico_capture(pico_capture: PicoSecondaryCapture) -> PicoCaptureSummary:
+    return PicoCaptureSummary(
+        mode=pico_capture.mode,
+        trigger_marker=pico_capture.trigger_marker,
+        monitor_enabled=pico_capture.mode in {PicoMonitoringMode.MONITOR_ONLY, PicoMonitoringMode.MONITOR_AND_RECORD},
+        recording_enabled=pico_capture.mode in {PicoMonitoringMode.RECORD_ONLY, PicoMonitoringMode.MONITOR_AND_RECORD},
+        recorded_inputs=tuple(item.value for item in pico_capture.record_inputs),
+    )

@@ -1,4 +1,4 @@
-"""Concrete Phase 3A simulator-backed orchestration services."""
+"""Concrete Phase 3B simulator-backed orchestration services."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Callable, Mapping
 
 from ircp_contracts import (
+    ArtifactSourceRole,
     ConfigurationScalar,
     DeviceConfiguration,
     DeviceFault,
@@ -18,7 +19,9 @@ from ircp_contracts import (
     ExperimentRecipe,
     FaultCategory,
     FaultSeverity,
+    PicoMonitoringMode,
     PreflightReport,
+    PumpProbeAcquisitionSummary,
     ReadinessCheck,
     ReadinessState,
     RunEvent,
@@ -28,50 +31,119 @@ from ircp_contracts import (
     RunState,
     SessionManifest,
     SessionStatus,
+    TimingMarker,
+    TimingSummary,
+    TimingSummaryEntry,
     ValidationIssue,
     ValidationSeverity,
+    summarize_mux_routes,
+    summarize_pico_capture,
 )
 from ircp_data_pipeline import SessionOpenRequest, SessionReplayer, SessionStore
 
-from .boundaries import GoldenPathDriverBundle, LiveDataPoint, PreflightValidator, RunCoordinator, RunMonitor, RunTimeline
+from .boundaries import (
+    LiveDataPoint,
+    PreflightValidator,
+    RunCoordinator,
+    RunMonitor,
+    RunTimeline,
+    SupportedV1DriverBundle,
+)
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _status_to_issue(device_status: DeviceStatus) -> ValidationIssue | None:
+def build_timing_summary(recipe: ExperimentRecipe) -> TimingSummary:
+    entries = (
+        TimingSummaryEntry(
+            label="Pump fire",
+            marker=recipe.timing.master.pump_fire_command.marker,
+            offset_ns=recipe.timing.master.pump_fire_command.offset_ns,
+        ),
+        TimingSummaryEntry(
+            label="Pump Q-switch",
+            marker=recipe.timing.master.pump_qswitch_command.marker,
+            offset_ns=recipe.timing.master.pump_qswitch_command.offset_ns,
+        ),
+        TimingSummaryEntry(
+            label="Master to slave trigger",
+            marker=recipe.timing.master.master_to_slave_trigger.marker,
+            offset_ns=recipe.timing.master.master_to_slave_trigger.offset_ns,
+        ),
+        TimingSummaryEntry(
+            label="Probe trigger",
+            marker=recipe.timing.slave.probe_trigger.marker,
+            offset_ns=recipe.timing.slave.probe_trigger.offset_ns,
+        ),
+        TimingSummaryEntry(
+            label="Probe process trigger",
+            marker=recipe.timing.slave.probe_process_trigger.marker,
+            offset_ns=recipe.timing.slave.probe_process_trigger.offset_ns,
+        ),
+        TimingSummaryEntry(
+            label="Probe enable window",
+            marker=recipe.timing.slave.probe_enable_window.marker,
+            offset_ns=recipe.timing.slave.probe_enable_window.start_offset_ns,
+        ),
+    )
+    return TimingSummary(
+        t0_label=recipe.timing.t0_label,
+        master_device_id=recipe.timing.master.device_identity.value,
+        slave_device_id=recipe.timing.slave.device_identity.value,
+        cycle_period_ns=recipe.timing.master.cycle_period_ns,
+        entries=entries,
+    )
+
+
+def build_pump_probe_summary(recipe: ExperimentRecipe) -> PumpProbeAcquisitionSummary:
+    return PumpProbeAcquisitionSummary(
+        pump_shots_before_probe=recipe.pump_shots_before_probe,
+        probe_timing_mode=recipe.probe_timing_mode,
+        acquisition_timing_mode=recipe.timing.acquisition_timing_mode,
+        acquisition_reference_marker=recipe.timing.acquisition_reference_marker,
+    )
+
+
+def _status_to_issue(device_status: DeviceStatus, *, blocking: bool) -> ValidationIssue | None:
     if device_status.connected and device_status.ready and not device_status.reported_faults:
         return None
     if device_status.reported_faults:
         latest_fault = device_status.reported_faults[-1]
         return ValidationIssue(
             code=latest_fault.code,
-            severity=ValidationSeverity.ERROR,
+            severity=ValidationSeverity.ERROR if blocking else ValidationSeverity.WARNING,
             message=latest_fault.message,
             source=device_status.device_kind.value,
-            blocking=latest_fault.blocking,
+            blocking=blocking and latest_fault.blocking,
             related_device_id=device_status.device_id,
         )
     if not device_status.connected:
         return ValidationIssue(
             code=f"{device_status.device_kind.value}_offline",
-            severity=ValidationSeverity.ERROR,
+            severity=ValidationSeverity.ERROR if blocking else ValidationSeverity.WARNING,
             message=f"{device_status.device_kind.value} is offline.",
             source=device_status.device_kind.value,
-            blocking=True,
+            blocking=blocking,
             related_device_id=device_status.device_id,
         )
     if not device_status.ready:
         return ValidationIssue(
             code=f"{device_status.device_kind.value}_not_ready",
-            severity=ValidationSeverity.ERROR,
+            severity=ValidationSeverity.ERROR if blocking else ValidationSeverity.WARNING,
             message=f"{device_status.device_kind.value} is connected but not ready.",
             source=device_status.device_kind.value,
-            blocking=True,
+            blocking=blocking,
             related_device_id=device_status.device_id,
         )
     return None
+
+
+def _readiness_state(issue: ValidationIssue | None) -> ReadinessState:
+    if issue is None:
+        return ReadinessState.PASS
+    return ReadinessState.BLOCK if issue.blocking else ReadinessState.WARN
 
 
 class StepOutcome(str, Enum):
@@ -90,10 +162,14 @@ class RunEventTemplate:
 
 @dataclass(frozen=True)
 class RawArtifactTemplate:
+    device_kind: DeviceKind
     stream_name: str
     relative_path: str
     record_count: int
+    source_role: ArtifactSourceRole
     content_type: str = "text/plain"
+    mux_output_target: str | None = None
+    related_marker: str | None = None
     metadata: Mapping[str, ConfigurationScalar] = field(default_factory=dict)
 
 
@@ -119,37 +195,63 @@ class RunExecutionPlan:
 RunPlanFactory = Callable[[ExperimentRecipe, str, str], RunExecutionPlan]
 
 
-class GoldenPathPreflightValidator(PreflightValidator):
-    """Deterministic preflight evaluator for the first MIRcat + HF2LI slice."""
+class SupportedV1PreflightValidator(PreflightValidator):
+    """Deterministic preflight evaluator for the supported-v1 slice."""
 
     async def validate(
         self,
         recipe: ExperimentRecipe,
         preset: ExperimentPreset | None,
-        drivers: GoldenPathDriverBundle,
+        drivers: SupportedV1DriverBundle,
     ) -> PreflightReport:
         checked_at = _utc_now()
-        mircat_status = await drivers.mircat.get_status()
-        hf2_status = await drivers.hf2li.get_status()
+        timing_summary = build_timing_summary(recipe)
+        pump_probe_summary = build_pump_probe_summary(recipe)
+        mux_summary = summarize_mux_routes(recipe.mux_route_selection)
+        pico_summary = summarize_pico_capture(recipe.pico_secondary_capture)
+
+        statuses = await _collect_driver_statuses(drivers)
+        lookup = {status.device_id: status for status in statuses}
 
         recipe_check = ReadinessCheck(
             check_id="recipe-shape",
             target=recipe.recipe_id,
             state=ReadinessState.PASS,
             checked_at=checked_at,
-            summary="Recipe shape matches the MIRcat sweep + HF2LI capture golden path.",
+            summary="Recipe shape matches the supported-v1 experiment model.",
         )
         preset_check = ReadinessCheck(
             check_id="preset-scope",
             target=preset.name if preset else "default",
             state=ReadinessState.PASS,
             checked_at=checked_at,
-            summary="Preset scope stays within the approved first-slice configuration surface.",
+            summary="Preset scope stays within the supported-v1 configuration surface.",
         )
-        device_checks = tuple(
-            self._build_device_check(device_status, checked_at)
-            for device_status in (mircat_status, hf2_status)
-        )
+
+        device_checks = [
+            self._build_device_check(lookup["mircat-qcl"], checked_at, blocking=True),
+            self._build_device_check(lookup["hf2li-primary"], checked_at, blocking=True),
+            self._build_device_check(lookup["t660-2-master"], checked_at, blocking=True),
+            self._build_device_check(lookup["t660-1-slave"], checked_at, blocking=True),
+            self._build_device_check(lookup["arduino-mux"], checked_at, blocking=True),
+        ]
+
+        pico_status = lookup["picoscope-5244d"]
+        if recipe.pico_secondary_capture.mode == PicoMonitoringMode.DISABLED:
+            device_checks.append(
+                ReadinessCheck(
+                    check_id="picoscope-status",
+                    target=pico_status.device_id,
+                    state=ReadinessState.PASS,
+                    checked_at=checked_at,
+                    summary="Secondary PicoScope monitoring is disabled for this recipe.",
+                )
+            )
+        else:
+            device_checks.append(
+                self._build_device_check(pico_status, checked_at, blocking=False)
+            )
+
         checks = (recipe_check, preset_check, *device_checks)
         ready_to_start = all(check.state != ReadinessState.BLOCK for check in checks)
         return PreflightReport(
@@ -157,20 +259,25 @@ class GoldenPathPreflightValidator(PreflightValidator):
             generated_at=checked_at,
             checks=checks,
             ready_to_start=ready_to_start,
+            timing_summary=timing_summary,
+            pump_probe_summary=pump_probe_summary,
+            selected_markers=recipe.timing.selected_digital_markers,
+            mux_summary=mux_summary,
+            pico_summary=pico_summary,
         )
 
-    def _build_device_check(self, device_status: DeviceStatus, checked_at: datetime) -> ReadinessCheck:
-        issue = _status_to_issue(device_status)
-        if issue is None:
-            state = ReadinessState.PASS
-        elif issue.blocking:
-            state = ReadinessState.BLOCK
-        else:
-            state = ReadinessState.WARN
+    def _build_device_check(
+        self,
+        device_status: DeviceStatus,
+        checked_at: datetime,
+        *,
+        blocking: bool,
+    ) -> ReadinessCheck:
+        issue = _status_to_issue(device_status, blocking=blocking)
         return ReadinessCheck(
-            check_id=f"{device_status.device_kind.value}-status",
+            check_id=f"{device_status.device_id}-status",
             target=device_status.device_id,
-            state=state,
+            state=_readiness_state(issue),
             checked_at=checked_at,
             summary=device_status.status_summary,
             issues=(issue,) if issue is not None else (),
@@ -178,11 +285,11 @@ class GoldenPathPreflightValidator(PreflightValidator):
 
 
 class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
-    """Single-path simulator-backed run authority for Phase 3A."""
+    """Single-path simulator-backed run authority for Phase 3B."""
 
     def __init__(
         self,
-        drivers: GoldenPathDriverBundle,
+        drivers: SupportedV1DriverBundle,
         session_store: SessionStore,
         session_replayer: SessionReplayer,
         preflight_validator: PreflightValidator,
@@ -202,28 +309,82 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         recipe: ExperimentRecipe,
         preset: ExperimentPreset | None,
     ) -> SessionManifest:
-        mircat_configuration = await self._drivers.mircat.apply_configuration(recipe.mircat_sweep)
-        hf2_configuration = await self._drivers.hf2li.apply_configuration(recipe.hf2_acquisition)
-        mircat_status = await self._drivers.mircat.get_status()
-        hf2_status = await self._drivers.hf2li.get_status()
+        timing_summary = build_timing_summary(recipe)
+        pump_probe_summary = build_pump_probe_summary(recipe)
+        mux_summary = summarize_mux_routes(recipe.mux_route_selection)
+        pico_summary = summarize_pico_capture(recipe.pico_secondary_capture)
+
+        master_configuration = await self._drivers.t660_master.apply_configuration(recipe.timing.master)
+        slave_configuration = await self._drivers.t660_slave.apply_configuration(recipe.timing.slave)
+        mircat_configuration = await self._drivers.mircat.apply_configuration(recipe.mircat)
+        hf2_configuration = await self._drivers.hf2li.apply_configuration(recipe.hf2_primary_acquisition)
+        mux_configuration = await self._drivers.mux.apply_configuration(recipe.mux_route_selection)
+
+        device_config_snapshot = [
+            master_configuration,
+            slave_configuration,
+            mircat_configuration,
+            hf2_configuration,
+            mux_configuration,
+        ]
+
+        pico_status = await self._drivers.picoscope.get_status()
+        if recipe.pico_secondary_capture.mode != PicoMonitoringMode.DISABLED and pico_status.connected:
+            pico_configuration = await self._drivers.picoscope.apply_configuration(recipe.pico_secondary_capture)
+            device_config_snapshot.append(pico_configuration)
+
+        device_status_snapshot = await _collect_driver_statuses(self._drivers)
         manifest = await self._session_store.create_session_manifest(
             recipe=recipe,
             preset=preset,
             calibration_references=recipe.calibration_references,
-            device_config_snapshot=(mircat_configuration, hf2_configuration),
-            device_status_snapshot=(mircat_status, hf2_status),
+            device_config_snapshot=tuple(device_config_snapshot),
+            device_status_snapshot=device_status_snapshot,
+            timing_summary=timing_summary,
+            pump_probe_summary=pump_probe_summary,
+            selected_markers=recipe.timing.selected_digital_markers,
+            mux_route_snapshot=recipe.mux_route_selection,
+            mux_summary=mux_summary,
+            pico_capture_snapshot=recipe.pico_secondary_capture,
+            pico_summary=pico_summary,
+            time_to_wavenumber_mapping=recipe.time_to_wavenumber_mapping,
         )
-        session_created_event = RunEvent(
-            event_id=f"{manifest.session_id}-event-session-created",
-            run_id=f"{manifest.session_id}-bootstrap",
-            event_type=RunEventType.SESSION_CREATED,
-            emitted_at=_utc_now(),
-            source="experiment-engine",
-            message="Authoritative session record created before run start.",
-            phase=RunPhase.STARTING,
-            session_id=manifest.session_id,
+
+        created_at = _utc_now()
+        bootstrap_events = (
+            RunEvent(
+                event_id=f"{manifest.session_id}-event-session-created",
+                run_id=f"{manifest.session_id}-bootstrap",
+                event_type=RunEventType.SESSION_CREATED,
+                emitted_at=created_at,
+                source="experiment-engine",
+                message="Authoritative session record created before the run became live.",
+                phase=RunPhase.STARTING,
+                session_id=manifest.session_id,
+                timing_summary=timing_summary,
+                pump_probe_summary=pump_probe_summary,
+                selected_markers=recipe.timing.selected_digital_markers,
+                mux_summary=mux_summary,
+                pico_summary=pico_summary,
+            ),
+            RunEvent(
+                event_id=f"{manifest.session_id}-event-config-applied",
+                run_id=f"{manifest.session_id}-bootstrap",
+                event_type=RunEventType.DEVICE_CONFIGURATION_APPLIED,
+                emitted_at=created_at,
+                source="experiment-engine",
+                message="Supported-v1 timing, probe, primary acquisition, routing, and optional secondary capture settings were applied.",
+                phase=RunPhase.STARTING,
+                session_id=manifest.session_id,
+                timing_summary=timing_summary,
+                pump_probe_summary=pump_probe_summary,
+                selected_markers=recipe.timing.selected_digital_markers,
+                mux_summary=mux_summary,
+                pico_summary=pico_summary,
+            ),
         )
-        manifest = await self._session_store.append_event(manifest.session_id, session_created_event)
+        for event in bootstrap_events:
+            manifest = await self._session_store.append_event(manifest.session_id, event)
         self._session_manifests[manifest.session_id] = manifest
         return manifest
 
@@ -244,8 +405,22 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         run_id = f"run-{self._run_counter:03d}"
 
         await self._session_store.update_session_status(session_id, SessionStatus.ACTIVE)
-        await self._drivers.hf2li.start_capture(recipe.hf2_acquisition, session_id)
-        await self._drivers.mircat.start_sweep(recipe.mircat_sweep)
+        await self._drivers.t660_master.arm_outputs()
+        await self._drivers.t660_slave.arm_outputs()
+        await self._drivers.mircat.arm()
+        hf2_capture = await self._drivers.hf2li.start_capture(recipe.hf2_primary_acquisition, session_id)
+
+        pico_capture_id: str | None = None
+        if recipe.pico_secondary_capture.mode != PicoMonitoringMode.DISABLED:
+            pico_status = await self._drivers.picoscope.get_status()
+            if pico_status.connected and pico_status.ready:
+                pico_capture = await self._drivers.picoscope.start_capture(
+                    recipe.pico_secondary_capture,
+                    session_id,
+                )
+                pico_capture_id = pico_capture.capture_id if pico_capture is not None else None
+
+        await self._drivers.mircat.start_recipe(recipe.mircat, recipe.probe_timing_mode)
 
         session_manifest = self._session_manifests[session_id]
         timeline_events = list(session_manifest.event_timeline)
@@ -254,7 +429,8 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         latest_fault: DeviceFault | None = None
         failure_reason: RunFailureReason | None = None
 
-        for step_index, step in enumerate(self._run_plan_factory(recipe, session_id, run_id).steps, start=1):
+        plan = self._run_plan_factory(recipe, session_id, run_id)
+        for step_index, step in enumerate(plan.steps, start=1):
             for event_template in step.events:
                 event = RunEvent(
                     event_id=f"{run_id}-event-{step_index}-{event_template.event_type.value}",
@@ -267,23 +443,31 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                     session_id=session_id,
                     device_fault=step.latest_fault,
                     failure_reason=step.failure_reason,
+                    timing_summary=preflight.timing_summary,
+                    pump_probe_summary=preflight.pump_probe_summary,
+                    selected_markers=preflight.selected_markers,
+                    mux_summary=preflight.mux_summary,
+                    pico_summary=preflight.pico_summary,
                     payload=dict(event_template.payload),
                 )
                 session_manifest = await self._session_store.append_event(session_id, event)
                 timeline_events.append(event)
 
             for artifact_index, artifact_template in enumerate(step.raw_artifacts, start=1):
-                from ircp_contracts import RawDataArtifact  # local import keeps the runtime module focused
+                from ircp_contracts import RawDataArtifact  # local import keeps this module focused
 
                 artifact = RawDataArtifact(
                     artifact_id=f"{run_id}-raw-{step_index}-{artifact_index}",
                     session_id=session_id,
-                    device_kind=DeviceKind.LABONE_HF2LI,
+                    device_kind=artifact_template.device_kind,
                     stream_name=artifact_template.stream_name,
                     relative_path=artifact_template.relative_path,
                     created_at=_utc_now(),
                     record_count=artifact_template.record_count,
                     content_type=artifact_template.content_type,
+                    source_role=artifact_template.source_role,
+                    mux_output_target=artifact_template.mux_output_target,
+                    related_marker=artifact_template.related_marker,
                     metadata=dict(artifact_template.metadata),
                 )
                 session_manifest = await self._session_store.register_raw_artifact(session_id, artifact)
@@ -302,6 +486,11 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                 active_step=step.active_step,
                 progress_fraction=step.progress_fraction,
                 preflight=preflight,
+                timing_summary=preflight.timing_summary,
+                pump_probe_summary=preflight.pump_probe_summary,
+                selected_markers=preflight.selected_markers,
+                mux_summary=preflight.mux_summary,
+                pico_summary=preflight.pico_summary,
                 latest_fault=latest_fault,
                 failure_reason=failure_reason,
                 last_event_id=timeline_events[-1].event_id if timeline_events else None,
@@ -311,6 +500,14 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         final_state = timeline_states[-1]
         final_status = _phase_to_session_status(final_state.phase)
         session_manifest = await self._session_store.update_session_status(session_id, final_status)
+
+        device_status_snapshot = await _collect_driver_statuses(self._drivers)
+        if latest_fault is not None:
+            device_status_snapshot = _replace_status_with_fault(device_status_snapshot, latest_fault)
+        session_manifest = await self._session_store.update_device_snapshots(
+            session_id,
+            device_status_snapshot=device_status_snapshot,
+        )
         self._session_manifests[session_id] = session_manifest
         self._run_timelines[run_id] = RunTimeline(
             run_id=run_id,
@@ -319,9 +516,13 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             live_data_points=tuple(timeline_live_data),
         )
 
-        if final_state.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED}:
-            await self._drivers.hf2li.stop_capture(f"{session_id}-capture")
-            await self._drivers.mircat.stop_sweep()
+        await self._drivers.hf2li.stop_capture(hf2_capture.capture_id)
+        if pico_capture_id is not None:
+            await self._drivers.picoscope.stop_capture(pico_capture_id)
+        await self._drivers.mircat.stop_recipe()
+        await self._drivers.mircat.disarm()
+        await self._drivers.t660_slave.stop_outputs()
+        await self._drivers.t660_master.stop_outputs()
 
         return final_state
 
@@ -331,7 +532,8 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
 
     async def report_device_fault(self, run_id: str, fault: DeviceFault) -> RunEvent:
         timeline = self._require_timeline(run_id)
-        event = RunEvent(
+        latest_state = timeline.states[-1]
+        return RunEvent(
             event_id=f"{run_id}-reported-fault",
             run_id=run_id,
             event_type=RunEventType.DEVICE_FAULT_REPORTED,
@@ -339,11 +541,15 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             source="experiment-engine",
             message=fault.message,
             phase=RunPhase.FAULTED,
-            session_id=timeline.states[-1].session_id,
+            session_id=latest_state.session_id,
             device_fault=fault,
             failure_reason=RunFailureReason.DEVICE_FAULT,
+            timing_summary=latest_state.timing_summary,
+            pump_probe_summary=latest_state.pump_probe_summary,
+            selected_markers=latest_state.selected_markers,
+            mux_summary=latest_state.mux_summary,
+            pico_summary=latest_state.pico_summary,
         )
-        return event
 
     async def abort_run(
         self,
@@ -361,6 +567,11 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             active_step="aborted",
             progress_fraction=previous.progress_fraction,
             preflight=previous.preflight,
+            timing_summary=previous.timing_summary,
+            pump_probe_summary=previous.pump_probe_summary,
+            selected_markers=previous.selected_markers,
+            mux_summary=previous.mux_summary,
+            pico_summary=previous.pico_summary,
             latest_fault=previous.latest_fault,
             failure_reason=reason,
             last_event_id=previous.last_event_id,
@@ -391,12 +602,40 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             raise KeyError(f"Unknown run id: {run_id}") from exc
 
 
+async def _collect_driver_statuses(drivers: SupportedV1DriverBundle) -> tuple[DeviceStatus, ...]:
+    return (
+        await drivers.mircat.get_status(),
+        await drivers.hf2li.get_status(),
+        await drivers.t660_master.get_status(),
+        await drivers.t660_slave.get_status(),
+        await drivers.mux.get_status(),
+        await drivers.picoscope.get_status(),
+    )
+
+
+def _replace_status_with_fault(
+    statuses: tuple[DeviceStatus, ...],
+    fault: DeviceFault,
+) -> tuple[DeviceStatus, ...]:
+    return tuple(
+        device_status_from_fault(status.device_id, status.device_kind, fault)
+        if status.device_id == fault.device_id
+        else status
+        for status in statuses
+    )
+
+
 def build_live_data_points(
     run_id: str,
     stream_name: str,
+    axis_label: str,
+    axis_units: str,
     values: tuple[tuple[float, float], ...],
+    *,
+    source_role: ArtifactSourceRole = ArtifactSourceRole.PRIMARY_RAW,
+    units: str = "V",
 ) -> tuple[LiveDataPoint, ...]:
-    """Create deterministic live-data points from (wavenumber, value) tuples."""
+    """Create deterministic live-data points from axis/value tuples."""
 
     captured_at = _utc_now()
     return tuple(
@@ -404,10 +643,14 @@ def build_live_data_points(
             sample_id=f"{run_id}-{stream_name}-{index}",
             captured_at=captured_at,
             stream_name=stream_name,
-            wavenumber_cm1=wavenumber,
+            axis_label=axis_label,
+            axis_units=axis_units,
+            axis_value=axis_value,
             value=value,
+            units=units,
+            source_role=source_role,
         )
-        for index, (wavenumber, value) in enumerate(values, start=1)
+        for index, (axis_value, value) in enumerate(values, start=1)
     )
 
 

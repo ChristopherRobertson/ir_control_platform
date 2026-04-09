@@ -1,4 +1,4 @@
-"""Typed UI models for the Phase 3A shell."""
+"""Typed UI models for the Phase 3B shell."""
 
 from __future__ import annotations
 
@@ -48,6 +48,13 @@ class SectionHeader:
 
 
 @dataclass(frozen=True)
+class SummaryPanel:
+    title: str
+    subtitle: str
+    items: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DeviceSummaryCard:
     device_label: str
     status_label: str
@@ -74,7 +81,7 @@ class EventLogItem:
 
 @dataclass(frozen=True)
 class LiveDataPointModel:
-    wavenumber_cm1: float
+    axis_value: float
     value: float
 
 
@@ -82,6 +89,9 @@ class LiveDataPointModel:
 class LiveDataSeries:
     label: str
     units: str
+    axis_label: str
+    axis_units: str
+    role_label: str
     points: tuple[LiveDataPointModel, ...]
 
 
@@ -91,7 +101,8 @@ class SessionSummaryCard:
     recipe_title: str
     status_label: str
     updated_at: datetime
-    raw_artifact_count: int
+    primary_raw_artifact_count: int
+    secondary_monitor_artifact_count: int
     processed_artifact_count: int
     analysis_artifact_count: int
     export_artifact_count: int
@@ -115,6 +126,7 @@ class SetupPageModel:
     recipe_title: str
     preset_name: str
     section_header: SectionHeader
+    summary_panels: tuple[SummaryPanel, ...]
     device_cards: tuple[DeviceSummaryCard, ...]
     readiness_rows: tuple[ReadinessRow, ...]
     preflight_report: PreflightReport | None = None
@@ -129,8 +141,10 @@ class RunPageModel:
     run_id: str | None
     run_phase_label: str
     session_id: str | None
+    summary_panels: tuple[SummaryPanel, ...]
     event_log: tuple[EventLogItem, ...]
-    live_data: tuple[LiveDataSeries, ...]
+    primary_live_data: tuple[LiveDataSeries, ...]
+    secondary_live_data: tuple[LiveDataSeries, ...]
     run_steps: tuple[RunStepSummary, ...]
 
 
@@ -142,7 +156,7 @@ class ResultsPageModel:
     section_header: SectionHeader
     sessions: tuple[SessionSummaryCard, ...]
     selected_session: SessionSummaryCard | None
-    manifest_details: tuple[str, ...]
+    detail_panels: tuple[SummaryPanel, ...]
 
 
 @dataclass(frozen=True)
@@ -153,3 +167,4 @@ class ServicePageModel:
     section_header: SectionHeader
     device_cards: tuple[DeviceSummaryCard, ...]
     notes: tuple[str, ...]
+    diagnostic_panels: tuple[SummaryPanel, ...] = ()
