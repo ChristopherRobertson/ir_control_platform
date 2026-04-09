@@ -4,6 +4,7 @@
 Use the repository documents this way:
 
 - `AGENTS.md` defines the finished product and steady-state architecture.
+- `EXPERIMENT.md` defines the canonical experiment-control model, supported v1 experiment slice, and operator-facing control, timing, and data semantics.
 - `REFACTOR.md` defines what to keep, rewrite, and delete while replacing the current implementation.
 - `PLANS.md` defines milestone order, workstreams, and Codex execution mechanics.
 - package-level `AGENTS.md` files refine local rules inside their directories.

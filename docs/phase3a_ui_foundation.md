@@ -4,6 +4,8 @@
 
 Phase 3A establishes the smallest useful UI/runtime foundation for the MIRcat + HF2LI golden path only.
 
+That narrow scope remains valid as a foundation choice. It does not define the full supported v1 system. `EXPERIMENT.md` is now the canonical experiment-control model, and the next phase must expand this foundation to cover T660-2 and T660-1 timing, Nd:YAG timing semantics, Arduino-controlled MUX routing, and PicoScope secondary recording without changing UI ownership boundaries.
+
 This phase intentionally does **not**:
 
 - add real vendor SDK calls
@@ -132,6 +134,10 @@ Coverage includes:
 Phase 3A intentionally leaves these as later work:
 
 - richer recipe editing and validation affordances
+- T0-based timing modeling for pump, probe, and acquisition relationships
+- T660-2 master and T660-1 slave timing configuration surfaces
+- Nd:YAG fire and Q-switch semantics mediated through the timing system
+- MUX route selection and PicoScope secondary acquisition or trigger selection
 - interactive polling or push updates instead of immediate deterministic progression
 - real processing, analysis, and export generation from persisted artifacts
 - real hardware adapters and vendor SDK integration
@@ -143,11 +149,14 @@ Phase 3A intentionally leaves these as later work:
 Because the shell, simulator scenarios, and adapter boundaries now exist, later work can split more safely across:
 
 - Setup form and validation expansion
+- timing model and preflight expansion for the full supported v1 slice
 - Run monitoring detail and control refinement
 - Results and replay detail views
 - Service expert workflows
 - real MIRcat driver implementation
 - real HF2LI driver implementation
+- T660 master/slave timing driver work
+- MUX and PicoScope secondary-recording work
 - session persistence hardening
 
 Each of those can target a bounded package or page area without changing the Phase 3A app shell or runtime ownership model.

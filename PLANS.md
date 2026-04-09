@@ -65,6 +65,7 @@ Use:
 ### Required source-of-truth documents
 Before implementation begins, Codex should rely on:
 - `AGENTS.md` — final desired product and architecture
+- `EXPERIMENT.md` — canonical experiment-control model and supported v1 control semantics
 - `REFACTOR.md` — explicit keep/rewrite/delete rules
 - `PLANS.md` — execution sequencing and milestone scope
 - package-level `AGENTS.md` files for local rules where needed
@@ -124,6 +125,7 @@ Before implementation begins, Codex should rely on:
 **Must define:**
 - `ExperimentRecipe`
 - `ExperimentPreset`
+- canonical T0-based pump/probe/acquisition timing model
 - `DeviceCapability`
 - `DeviceConfiguration`
 - `DeviceStatus`
@@ -139,6 +141,7 @@ Before implementation begins, Codex should rely on:
 - `ExportArtifact`
 - `CalibrationReference`
 - `RunFailureReason`
+- MUX route and PicoScope secondary-recording selection semantics
 
 **Done when:**
 - downstream teams can code against stable types
@@ -193,6 +196,8 @@ Before implementation begins, Codex should rely on:
 **Must own:**
 - preflight validation
 - coordinated sequencing
+- master/slave timing sequencing
+- pump/probe/acquisition relationship control
 - authoritative run state
 - operator command handling
 - event emission
@@ -223,6 +228,13 @@ Before implementation begins, Codex should rely on:
 - recipe snapshot
 - device status and configuration snapshot
 - calibration references
+- timing configuration relative to T0
+- pump/probe/acquisition relationships
+- selected digital timing references
+- pump-shot count behavior
+- probe continuous or synchronized mode
+- MUX route selection
+- PicoScope recording and trigger context
 - operator metadata
 - raw acquired data
 - run events
@@ -291,10 +303,15 @@ Before implementation begins, Codex should rely on:
 
 **Drivers in scope:**
 - MIRcat
-- T660
+- T660-2 master timing
+- T660-1 slave timing
 - LabOne / HF2
-- PicoScope
+- PicoScope 5244D
+- Arduino-controlled MUX
+
+**Future placeholder only:**
 - PicoVNA
+- direct OPO control
 
 **Done when:**
 - the experiment engine can run against simulator adapters
@@ -405,6 +422,22 @@ Before implementation begins, Codex should rely on:
 - a user can complete the standard workflow end-to-end using only simulated devices
 - the session can be reopened later
 
+### Phase 3B — Supported v1 experiment model expansion
+**Goal:** widen the simulator-backed and contract-backed slice from the MIRcat + HF2LI foundation to the full supported v1 experiment model defined in `EXPERIMENT.md`.
+
+**Tasks:**
+1. add a canonical T0-based timing block to the recipe, preflight, and run-state model
+2. model T660-2 master timing, T660-1 slave timing, and Nd:YAG fire and Q-switch semantics without direct OPO control
+3. add probe continuous versus synchronized operation and pump-shot-count-before-probe semantics
+4. add MUX route selection and PicoScope secondary recording or trigger selection to the operator model
+5. persist timing, digital-marker, MUX, PicoScope, and time-to-wavenumber mapping context in the session model
+6. extend simulator scenarios and UI scaffolding to expose the expanded system without breaking package boundaries
+
+**Exit criteria:**
+- the typed contracts and simulator-backed UI reflect MIRcat, HF2LI, T660-2, T660-1, PicoScope, MUX, and Nd:YAG timing semantics
+- the operator can configure pump, probe, and acquisition relationships without a device-first console
+- direct OPO control remains out of scope
+
 ### Phase 4 — Data plane completion
 **Goal:** make acquisition, persistence, replay, and artifact handling durable.
 
@@ -455,12 +488,12 @@ Before implementation begins, Codex should rely on:
 
 **Tasks:**
 1. integrate MIRcat in controlled smoke flows
-2. integrate T660 timing paths
+2. integrate T660-2 master timing, Nd:YAG fire and Q-switch paths, and T660-1 slave timing
 3. integrate LabOne / HF2 acquisition
-4. integrate PicoScope and PicoVNA where applicable
+4. integrate PicoScope secondary recording and Arduino-controlled MUX routing
 5. validate device fault display and persistence behavior on real hardware
 6. measure performance and latency
-7. close test gaps and document known limits
+7. close test gaps and document known limits while keeping direct OPO control out of scope
 
 **Exit criteria:**
 - the minimum supported hardware stack passes smoke tests
