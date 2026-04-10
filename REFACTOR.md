@@ -4,6 +4,7 @@
 Use the repository documents this way:
 
 - `AGENTS.md` defines the finished product.
+- `docs/ui_foundation.md` defines the active UI foundation and presentation-surface model for ongoing work.
 - `REFACTOR.md` defines how to replace the current implementation.
 - `PLANS.md` defines milestone order, workstreams, and Codex execution.
 
@@ -46,10 +47,28 @@ not as the structural template for the new product.
 - Preserve valuable knowledge and assets.
 - Do not preserve the current UI architecture.
 - Do not preserve direct UI ownership of orchestration, persistence, processing, or analysis.
+- Complete the remaining work from the user-facing workflow inward so real interaction can determine what additional backend detail is actually needed.
 - Do not introduce compatibility layers that keep the old structure alive inside the new product.
 - Delete anything that does not fit the target architecture once its useful content has been extracted.
 
 A copy of the current UI already exists outside the active refactor. Do not create an in-repo `legacy/` application or temporary archive tree.
+
+## Remaining execution emphasis
+For the remaining work after the completed Phase 3A shell foundation:
+
+- execute in a UI-first / workflow-first order
+- use Setup, Advanced, Calibrated, Run, Results, Analyze, and Service / Maintenance as the planning lens
+- expose real saved settings metadata, raw outputs, provenance, and faults through the product surfaces early
+- refine backend detail according to what the workflow surfaces actually need
+- avoid speculative backend overbuild that has no validated user-facing requirement yet
+
+This sequencing does not change authority:
+
+- orchestration and authoritative run state still belong outside the UI
+- sessions, artifacts, replay, and provenance still belong outside the UI
+- processing, analysis, and reports still remain headless and reproducible outside the UI
+
+Completed phase documents are historical records only. Use `docs/ui_foundation.md` for active UI guidance, not `docs/phase3a_ui_foundation.md`.
 
 ## Non-negotiable rewrite rules
 1. **One implementation path per workflow.**  

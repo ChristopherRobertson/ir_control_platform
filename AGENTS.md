@@ -5,6 +5,7 @@ Use the repository documents this way:
 
 - `AGENTS.md` defines the finished product and steady-state architecture.
 - `EXPERIMENT.md` defines the canonical experiment-control model, supported v1 experiment slice, and operator-facing control, timing, and data semantics.
+- `docs/ui_foundation.md` defines the active UI shell foundation, workflow surface model, and presentation-boundary rules for current and future work.
 - `REFACTOR.md` defines what to keep, rewrite, and delete while replacing the current implementation.
 - `PLANS.md` defines milestone order, workstreams, and Codex execution mechanics.
 - package-level `AGENTS.md` files refine local rules inside their directories.
@@ -20,12 +21,15 @@ The completed product must provide one coherent application for:
 5. Data analysis
 6. Result output and visualization
 
+The product must be understandable and operable through the real user-facing workflow, not through a collection of disconnected device views or hidden expert-only paths.
+
 This file describes the target product only. It is not a migration plan.
 
 ## Product goals
 - Let an operator verify the current setup and press **START** to run a standard experiment with minimal friction.
 - Let an advanced user open deeper controls for calibration, synchronization, timing, acquisition, and device-specific tuning.
 - Present the system as one product, not a collection of unrelated device panels.
+- Make the product legible through the actual workflow surfaces that operators and experts use: Setup, Advanced, Calibrated, Run, Results, Analyze, and Service / Maintenance.
 - Surface device status, vendor error codes, and run faults clearly.
 - Support live operation and offline replay, reprocessing, comparison, and export from recorded runs.
 - Use one canonical implementation path per workflow. No compatibility layers, hidden fallbacks, or workaround behavior.
@@ -58,50 +62,78 @@ Advanced mode is the expert workflow.
 - Exposes calibration controls, synchronization parameters, acquisition tuning, and device-specific settings
 - Supports non-standard experimental conditions without creating a separate application
 - Uses the same underlying workflow and contracts as simple mode
+- Keeps bench-owned calibrated assumptions behind controlled expert surfaces rather than mixing them into the default operator path
 
 ## Primary product areas
-The interface should be organized around user intent.
+The interface should be organized around the user-facing workflow.
 
 ### Setup
+- Normal operator surface
 - Experiment recipe selection and editing
 - Presets and validated defaults
 - Calibration selection
-- Configuration review
+- Configuration review and saved-settings summary
 - Start readiness and blocking issues
 
+### Advanced
+- Expert experiment-to-experiment tuning surface
+- Detailed timing, acquisition, scan, and synchronization controls
+- Progressive disclosure from the main setup workflow
+- Same canonical workflow path and contracts as Setup
+
+### Calibrated
+- Bench-owned and installation-owned truth
+- Controlled calibration references, mapping defaults, and fixed scientific wiring assumptions
+- Explicitly guarded from routine operator editing
+- Visible when needed, but not treated as ordinary experiment-to-experiment tuning
+
 ### Run
+- Current-state execution surface
 - Final verification
 - Start, pause, abort, and completion states
-- Progress, warnings, fault visibility, and run summary
-
-### Hardware
-- Connection state
-- Health and diagnostics
-- Device capabilities
-- Vendor error visibility
-- Recovery entry points
-
-### Live Data
-- Incoming acquisition streams
-- Status indicators and live plots
-- Run metadata and event timeline
-
-### Analysis
-- Processing configuration
-- Derived metrics and experiment-specific analysis
-- Comparison against baselines or prior runs
+- Progress, live status, live data, warnings, fault visibility, and run summary
 
 ### Results
+- Persisted-session browser and summary surface
 - Session browser
+- Saved settings metadata and session provenance visibility
 - Final visualizations
 - Structured artifacts
 - Export, report, replay, and reprocessing entry points
 
+### Analyze
+- Persisted-session scientific review surface
+- Processing configuration
+- Derived metrics and experiment-specific analysis
+- Comparison against baselines or prior runs
+- Reprocessing and comparison using persisted session truth
+
 ### Service / Maintenance
-- Expert-only device controls
-- Diagnostics and calibration tools
+- Expert-oriented diagnostics and calibration tools
+- Health, diagnostics, and recovery entry points
 - Configuration snapshots
-- Manual recovery actions
+- Controlled manual recovery actions
+- Not the normal operator workflow
+
+Supporting views such as hardware detail and expanded live-data inspection belong inside these workflow surfaces. They do not become separate authorities or a device-first navigation model.
+
+## Presentation strategy
+- The active frontend strategy is the existing Python, server-rendered UI shell.
+- Remaining work should build on that shell rather than assume a frontend-stack replacement.
+- The rendering layer may be replaceable in principle, but React is not the current default assumption.
+- Prioritizing the presentation surfaces during remaining work is a sequencing choice, not an ownership change.
+
+## Remaining implementation emphasis
+For the remaining work, the product should be completed from the outside in:
+- finish the actual user-facing workflow surfaces first so the team can interact with the product and see what is truly needed
+- expose saved settings metadata, raw outputs, faults, and persisted session context through the product surfaces early
+- refine backend and detail work according to real interaction needs rather than speculative overbuilding
+
+This does not change authority:
+- the control plane still owns orchestration and authoritative run state
+- the data plane still owns sessions, artifacts, replay, and provenance
+- processing and analysis remain outside `ui-shell`
+- the UI configures, monitors, and inspects the system through typed boundaries
 
 ## End-state architecture
 The product lives in a single repository with strong package boundaries.

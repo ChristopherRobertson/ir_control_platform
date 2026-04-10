@@ -1,6 +1,21 @@
 # Package Boundaries
 
-This document records the approved package direction for the supported v1 experiment model. The initial Phase 2 and Phase 3A foundation proved the architecture with a MIRcat + HF2LI-only slice, but the canonical v1 model now also includes T660-2 and T660-1 timing semantics, Nd:YAG timing control mediated by T660-2, Arduino-controlled MUX routing, and PicoScope as a secondary recorded source. The ownership rules remain intentionally strict so later driver, engine, data, and UI work can land without re-litigating authority.
+This document records the approved package direction for the supported v1 experiment model. The completed Phase 2 and Phase 3A work proved the initial architecture with a MIRcat + HF2LI-only slice, but active UI guidance now lives in `docs/ui_foundation.md`, not in the completed phase document. The canonical v1 model now also includes T660-2 and T660-1 timing semantics, Nd:YAG timing control mediated by T660-2, Arduino-controlled MUX routing, and PicoScope as a secondary recorded source. The ownership rules remain intentionally strict so later driver, engine, data, and UI work can land without re-litigating authority.
+
+## UI-first sequencing rule
+
+The remaining work is presentation-first from a sequencing perspective, not from an ownership perspective.
+
+- Complete Setup, Advanced, Calibrated, Run, Results, Analyze, and Service / Maintenance as the user-facing workflow surfaces first.
+- Use those surfaces to determine which metadata, commands, visualizations, and persisted outputs are actually required.
+- Do not use that sequencing rule to move truth into `ui-shell`.
+
+Authority remains unchanged:
+
+- `experiment-engine` still owns orchestration and authoritative run state
+- `data-pipeline` still owns sessions, artifacts, replay, and provenance
+- `processing` and `analysis` still own deterministic transforms and interpretation outside the UI
+- `ui-shell` still consumes typed control-plane and data-plane boundaries
 
 ## Approved dependency direction
 
@@ -63,7 +78,8 @@ flowchart LR
 - `experiment-engine` owns the neutral T0-based timing model and translates pump-shot count, probe mode, acquisition timing mode, and selected digital references into one coordinated execution path.
 - `drivers` own device-specific programming for T660-2, T660-1, PicoScope, and the Arduino-controlled MUX; they do not decide experiment timing relationships.
 - `data-pipeline` remains the owner of persisted HF2LI primary raw artifacts and any secondary PicoScope monitor artifacts.
-- `ui-shell` presents timing, MUX, and PicoScope choices as experiment controls, not as separate device-first consoles.
+- `ui-shell` presents timing, MUX, PicoScope, and session-review choices through Setup, Advanced, Calibrated, Run, Results, Analyze, and Service surfaces, not as separate device-first consoles.
+- saved settings metadata and raw outputs become visible through the workflow surfaces by reading authoritative control-plane and data-plane state rather than inventing UI-local truth
 
 ## Canonical v1 command flow
 

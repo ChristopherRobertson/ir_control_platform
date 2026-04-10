@@ -9,11 +9,12 @@ It is normative for:
 - what the operator controls
 - what the system records
 - how the supported v1 experiment is modeled
-- how the control model maps into Setup, Run, Results, and Service surfaces
+- how the control model maps into Setup, Advanced, Calibrated, Run, Results, Analyze, and Service surfaces
 
 Document relationship:
 
 - `AGENTS.md` defines the finished product, workflow-first architecture, and package boundaries.
+- `docs/ui_foundation.md` defines the active UI foundation and workflow surface model.
 - `REFACTOR.md` defines migration constraints, salvage rules, and forbidden legacy patterns.
 - `PLANS.md` defines sequencing, milestones, and execution mechanics.
 - `EXPERIMENT.md` defines the experiment itself: the supported subsystem roles, timing semantics, data semantics, and operator-facing control surface.
@@ -247,22 +248,36 @@ The product surface must remain experiment-first, not device-first.
 
 | Product area | What must be visible there | What it must not become |
 |---|---|---|
-| Setup | Experiment mode, pump/probe/acquisition relationship, `T0` timing summary, pump-shot count, probe mode, acquisition mode, calibration selection, MUX route summary, PicoScope secondary-recording summary, and blocking readiness issues. | A collection of separate device panels. |
-| Run | Active run state, event log, primary live HF2LI traces, selected PicoScope monitor traces, current timing summary relative to `T0`, selected digital markers, and active faults. | The authoritative owner of orchestration or persistence. |
-| Results | Raw HF2LI data, processed data, analysis outputs, session provenance, recorded PicoScope context, and raw or processed overlays. | A live-device dependency or a place that reconstructs missing timing context from memory. |
+| Setup | Experiment mode, pump/probe/acquisition relationship, `T0` timing summary, pump-shot count, probe mode, acquisition mode, calibration selection, MUX route summary, PicoScope secondary-recording summary, saved-settings summary, and blocking readiness issues. | A collection of separate device panels. |
+| Advanced | Detailed timing controls, acquisition tuning, selected digital timing references, MIRcat scan parameterization, and other legitimate experiment-to-experiment expert controls. | A separate device-first console or a place that bypasses the canonical experiment model. |
+| Calibrated | Bench-owned calibration references, mapping defaults, signal-route assumptions, detector identity assumptions, and installation-owned truth that should change only through controlled workflows. | Routine operator tuning or an ad hoc escape hatch around validated defaults. |
+| Run | Active run state, event log, primary live HF2LI traces, selected PicoScope monitor traces, current timing summary relative to `T0`, selected digital markers, active faults, and hardware state needed to monitor the current execution. | The authoritative owner of orchestration or persistence. |
+| Results | Raw HF2LI data, processed data, saved settings metadata, session provenance, recorded PicoScope context, final visualizations, and raw or processed overlays. | A live-device dependency or a place that reconstructs missing timing context from memory. |
+| Analyze | Reprocessing controls, comparison tools, derived metrics, provenance-aware overlays, and persisted-session scientific review affordances. | UI-local analysis truth that cannot be reproduced from persisted artifacts. |
 | Service | Calibration tools, diagnostics, timing verification aids, configuration snapshots, and controlled recovery actions for MIRcat, HF2LI, T660 master/slave timing, MUX, and PicoScope. | A raw vendor passthrough console or a replacement for the normal Setup and Run path. |
 
-If a distinct Live Data surface exists later, its role is narrower than Run and Results:
+Expanded live-data inspection and hardware detail may exist inside Run and Service, but they are supporting views inside the workflow surfaces, not separate product-defining authorities.
 
-- Run remains the operator control and current-state surface.
-- Live Data may host expanded synchronized plots, routing inspection, and marker-alignment views.
-- Results remains the persisted-session review surface.
+## 8. Execution note for remaining work
 
-Live Data must not become a second run controller or a hidden persistence authority.
+The remaining user-facing development should use these surfaces as the organizing lens.
 
-## 8. Data semantics
+That means:
 
-### 8.1 Raw data
+- complete the interactive workflow so the team can see what the product actually needs
+- expose saved settings metadata, raw outputs, and persisted provenance through Results and Analyze early
+- let canonical saved sessions and artifacts guide later refinement of processing and analysis affordances
+
+This does not change scientific or architectural ownership:
+
+- the experiment model remains authoritative outside the UI
+- run orchestration remains outside the UI
+- session truth remains outside the UI
+- processing and analysis remain reproducible from persisted artifacts
+
+## 9. Data semantics
+
+### 9.1 Raw data
 
 Raw data is defined as the output signals from the MCT detectors after they have been demodulated and filtered by the HF2LI.
 
@@ -272,7 +287,7 @@ Consequences:
 - The time-to-wavenumber conversion used to represent MIRcat scan-mode data remains part of raw-data representation, not a processed-data step.
 - Any further modification to those raw signals is processed data.
 
-### 8.2 Secondary PicoScope data
+### 9.2 Secondary PicoScope data
 
 PicoScope data is:
 
@@ -285,7 +300,7 @@ The supported v1 system can acquire HF2LI and PicoScope data simultaneously. Tha
 
 PicoScope data is not the primary scientific raw-data authority. It may still be persisted as auxiliary raw-monitor artifacts, but it must remain clearly distinguished from the HF2LI primary raw data.
 
-### 8.3 Processed data
+### 9.3 Processed data
 
 Processed data is any further modification applied to the primary raw data or to auxiliary recorded data after raw acquisition representation has been established.
 
@@ -297,7 +312,7 @@ This includes, for example:
 - filtering beyond the HF2LI demodulation/filter stage
 - averaging, alignment, correction, and similar transforms
 
-### 8.4 Analysis output
+### 9.4 Analysis output
 
 Analysis output is any derived scientific interpretation built from raw or processed artifacts, such as:
 
@@ -307,11 +322,11 @@ Analysis output is any derived scientific interpretation built from raw or proce
 - derived parameters
 - pass or fail summaries
 
-### 8.5 Exported output
+### 9.5 Exported output
 
 Exported output is any generated report, bundle, table, figure, or external-delivery artifact produced from persisted raw, processed, or analysis artifacts.
 
-### 8.6 Overlay behavior
+### 9.6 Overlay behavior
 
 Overlay behavior is conceptual, not implementation-specific:
 
@@ -319,7 +334,7 @@ Overlay behavior is conceptual, not implementation-specific:
 - Such overlays are interpretive views built from persisted provenance.
 - An overlay must never redefine PicoScope data as the primary scientific raw-data truth.
 
-## 9. Session provenance requirements
+## 10. Session provenance requirements
 
 Every session for this experiment model must persist enough information to reproduce what was configured and what was observed.
 
@@ -341,7 +356,7 @@ At minimum, the session record must include:
 
 The session model must be sufficient for later replay, reprocessing, timing interpretation, and result review without reading live MIRcat state, live timing state, or ad hoc UI memory.
 
-## 10. Explicit non-goals and placeholders
+## 11. Explicit non-goals and placeholders
 
 The following are not in scope for v1:
 
@@ -355,7 +370,7 @@ Placeholder note for future work:
 
 - A future phase may introduce direct OPO control only as a new first-class subsystem with its own contracts, timing semantics, validation, and UI mapping. It must not be smuggled into v1 as an expert-only side path.
 
-## 11. Implications for implementation phases
+## 12. Implications for implementation phases
 
 This document changes the interpretation of the remaining phases.
 
@@ -372,7 +387,8 @@ The supported slice is no longer "MIRcat + HF2LI only". The supported v1 impleme
 
 Phase implications:
 
-- The existing Phase 3A UI and runtime work remains valid as a workflow-first foundation. It proved shell ownership, route structure, page-state semantics, and simulator-backed boundaries.
+- The existing Phase 3A UI and runtime work remains valid as historical proof of the shell boundary and workflow-first direction.
+- Active UI foundation guidance now lives in `docs/ui_foundation.md`.
 - The next phase must expand the contracts, simulator model, engine semantics, and UI control surfaces beyond the narrower MIRcat + HF2LI-only assumption.
 - That expansion must add the canonical `T0` timing model, master/slave timing semantics, pump-shot behavior, probe continuous versus synchronized behavior, MUX route selection, PicoScope secondary recording, and persisted timing context.
 - Direct OPO control remains out of scope while this supported v1 slice is being implemented.

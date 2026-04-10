@@ -13,6 +13,7 @@ The product must present a simple operator workflow for standard runs while stil
 
 This document is the execution plan for Codex.
 - Product definition belongs in `AGENTS.md`.
+- Active UI foundation guidance belongs in `docs/ui_foundation.md`.
 - Rewrite rules belong in `REFACTOR.md`.
 
 ## 2. Operating principle
@@ -21,10 +22,29 @@ Do not treat this as a UI-only rewrite.
 The target system has three architectural planes:
 - **Control plane**: device orchestration, validation, run lifecycle, commands, typed runtime state
 - **Data plane**: acquisition, session persistence, processing, analysis, export, replay
-- **Presentation plane**: setup, run monitoring, live data display, analysis workflows, results browsing
+- **Presentation plane**: Setup, Advanced, Calibrated, Run, Results, Analyze, and Service / Maintenance surfaces
 
 The UI configures, monitors, and inspects the system.
 It does not directly own vendor-SDK control logic, raw data collection, or authoritative run state.
+
+### Remaining execution emphasis
+The remaining work after the completed Phase 3A shell foundation must be executed in a UI-first / workflow-first order.
+
+- Complete the user-facing surfaces first so the team can see and interact with the actual product before deciding what deeper backend detail is truly needed.
+- Use these surfaces as the organizing lens for the remaining work: Setup, Advanced, Calibrated, Run, Results, Analyze, and Service / Maintenance.
+- Make saved settings metadata, raw outputs, persisted session context, and blocking issues visible through those surfaces early.
+- Refine backend and detail work according to real interaction needs instead of speculative overbuilding.
+
+This is a sequencing rule, not an architectural change:
+
+- the presentation plane is prioritized from the execution-order perspective
+- the control plane still owns orchestration and authoritative run state
+- the data plane still owns sessions, artifacts, replay, and provenance
+- processing and analysis still remain outside `ui-shell`
+
+This sequencing guidance lives inside the existing milestone structure. Completed phases remain historical milestones, not active development guides.
+
+Completed phase documents remain historical records. `docs/ui_foundation.md` is the active UI foundation for current and future work, and `docs/phase3a_ui_foundation.md` is historical only.
 
 ## 3. Codex execution model
 
@@ -66,6 +86,7 @@ Use:
 Before implementation begins, Codex should rely on:
 - `AGENTS.md` — final desired product and architecture
 - `EXPERIMENT.md` — canonical experiment-control model and supported v1 control semantics
+- `docs/ui_foundation.md` — active UI shell foundation and workflow surface model
 - `REFACTOR.md` — explicit keep/rewrite/delete rules
 - `PLANS.md` — execution sequencing and milestone scope
 - package-level `AGENTS.md` files for local rules where needed
@@ -87,26 +108,30 @@ Before implementation begins, Codex should rely on:
 ### Workflow A — Standard operator run
 1. Open Setup
 2. Confirm hardware availability and experiment validity
-3. Review or load experiment preset
-4. Review preflight summary
-5. Press Start
-6. Observe run progress and live data
-7. Review processed results and analysis outputs
-8. Export or save the session for later replay
+3. Review or load experiment preset and the saved-settings summary
+4. Open Advanced only when experiment-to-experiment tuning is required
+5. Treat Calibrated assumptions as guarded installation-owned truth unless a controlled expert workflow is required
+6. Review preflight summary
+7. Press Start
+8. Observe run progress, live state, and live data
+9. Review persisted results and Analyze outputs
+10. Export or save the session for later replay
 
 ### Workflow B — Expert calibration and troubleshooting
-1. Open Service / Maintenance
-2. Inspect one subsystem at a time
-3. Tune or calibrate device-specific settings
-4. Save calibration or configuration snapshot
-5. Return to the normal Setup and Run workflow
+1. Open Advanced, Calibrated, or Service / Maintenance as appropriate
+2. Inspect one subsystem at a time without leaving the canonical workflow model
+3. Tune experiment-to-experiment settings in Advanced
+4. Change bench-owned calibrated assumptions only through controlled expert workflows
+5. Save calibration or configuration snapshot when required
+6. Return to the normal Setup and Run workflow
 
 ### Workflow C — Offline scientific review
 1. Open Results / Analyze
 2. Load a prior session
-3. Re-run processing on saved raw data
-4. Compare against references or prior runs
-5. Generate exports and reports without hardware connected
+3. Inspect saved settings metadata, raw outputs, and persisted provenance
+4. Re-run processing on saved raw data
+5. Compare against references or prior runs
+6. Generate exports and reports without hardware connected
 
 ## 6. Workstreams and ownership
 
@@ -160,25 +185,27 @@ Before implementation begins, Codex should rely on:
 - state semantics
 - visual status system
 
-**Top-level product areas:**
+**Top-level workflow surfaces:**
 - Setup
+- Advanced
+- Calibrated
 - Run
-- Hardware
-- Live Data
-- Analysis
 - Results
+- Analyze
 - Service / Maintenance
 
 **Required design behaviors:**
 - simple mode default
 - advanced mode progressive disclosure
+- calibrated assumptions handled as guarded bench-owned truth
 - persistent top status bar
 - clear visibility of device status, blocking issues, and current session state
-- run controls visible during active runs
+- run controls, live state, and live data visible during active runs
+- saved settings metadata and raw outputs visible through Results and Analyze
 - dense scientific UI without overwhelming standard operators
 
 **Done when:**
-- every required workflow has a screen path
+- every required workflow surface has a screen path
 - error, blocked, fault, offline, and loading states are designed
 - the UI shell can be implemented against simulators
 
@@ -422,6 +449,10 @@ Before implementation begins, Codex should rely on:
 - a user can complete the standard workflow end-to-end using only simulated devices
 - the session can be reopened later
 
+Historical note:
+- Phase 3 is complete as the initial shell foundation milestone.
+- Its active UI guidance has been carried forward into `docs/ui_foundation.md`.
+
 ### Phase 3B — Supported v1 experiment model expansion
 **Goal:** widen the simulator-backed and contract-backed slice from the MIRcat + HF2LI foundation to the full supported v1 experiment model defined in `EXPERIMENT.md`.
 
@@ -431,11 +462,13 @@ Before implementation begins, Codex should rely on:
 3. add probe continuous versus synchronized operation and pump-shot-count-before-probe semantics
 4. add MUX route selection and PicoScope secondary recording or trigger selection to the operator model
 5. persist timing, digital-marker, MUX, PicoScope, and time-to-wavenumber mapping context in the session model
-6. extend simulator scenarios and UI scaffolding to expose the expanded system without breaking package boundaries
+6. extend simulator scenarios and UI scaffolding to expose Setup, Advanced, Calibrated, and Run surfaces for the expanded system without breaking package boundaries
+7. keep Service / Maintenance expert-oriented and out of the default operator path
 
 **Exit criteria:**
 - the typed contracts and simulator-backed UI reflect MIRcat, HF2LI, T660-2, T660-1, PicoScope, MUX, and Nd:YAG timing semantics
 - the operator can configure pump, probe, and acquisition relationships without a device-first console
+- the operator-facing workflow is legible through Setup, Advanced, Calibrated, and Run before deeper backend detail is expanded
 - direct OPO control remains out of scope
 
 ### Phase 4 — Data plane completion
@@ -449,13 +482,14 @@ Before implementation begins, Codex should rely on:
 5. implement replay mode
 6. support partial and faulted sessions
 7. implement provenance tracking
+8. expose the persisted session truth needed by Results and Analyze without relying on transient UI state
 
 **Exit criteria:**
 - offline replay works from saved sessions
 - result browsing no longer depends on live app state
 
-### Phase 5 — Analysis and results workspace
-**Goal:** make saved runs scientifically useful after acquisition.
+### Phase 5 — Results and Analyze surfaces
+**Goal:** make saved runs scientifically useful through the persisted-session review workflow.
 
 **Tasks:**
 1. implement Results browser
@@ -465,22 +499,24 @@ Before implementation begins, Codex should rely on:
 5. add comparison workflow
 6. add export and report generation
 7. ensure reprocessing without hardware
+8. use real saved settings metadata and raw outputs to refine the surface affordances instead of speculative analysis UI
 
 **Exit criteria:**
 - an old run can be reopened, reprocessed, compared, and exported
 
-### Phase 6 — Advanced controls and service surfaces
-**Goal:** expose expert functions without polluting the standard workflow.
+### Phase 6 — Advanced, Calibrated, and Service surfaces
+**Goal:** deepen expert functions without polluting the standard workflow.
 
 **Tasks:**
-1. implement Hardware workspace
-2. implement Service / Maintenance workspace
-3. expose device diagnostics and calibration controls
-4. implement reset, reconnect, and configuration snapshot tools
-5. disable conflicting manual operations during active runs
+1. deepen Advanced experiment-to-experiment tuning
+2. implement guarded Calibrated workflows for bench-owned truth
+3. implement Service / Maintenance workspace
+4. expose device diagnostics and calibration controls
+5. implement reset, reconnect, and configuration snapshot tools
+6. disable conflicting manual operations during active runs
 
 **Exit criteria:**
-- advanced users can reach device-specific capabilities
+- advanced users can reach expert capabilities without leaving the canonical workflow model
 - the standard operator flow remains simple
 
 ### Phase 7 — Real-device integration and hardening
@@ -507,38 +543,50 @@ Must include:
 - connection state
 - calibration presence and status
 - experiment recipe selection and editing
+- saved-settings metadata summary
 - preflight summary
 - blocked, warn, and ready states
 - simple versus advanced settings disclosure
 
-### B. Run workspace
+### B. Advanced workspace
+Must include:
+- expert experiment-to-experiment timing controls
+- acquisition and synchronization tuning
+- detailed scan parameterization
+- selected digital timing reference controls
+- explicit warnings when changes exceed standard workflow assumptions
+
+### C. Calibrated workspace
+Must include:
+- guarded calibration references
+- installation-owned mapping defaults
+- signal-route and detector identity assumptions
+- controlled edit and review path for bench-owned truth
+
+### D. Run workspace
 Must include:
 - current run state
 - current step or timeline
 - progress
 - event log
 - live data panels
-- pause, resume, and abort controls
-- fault messaging
-- session ID and save-state visibility
-
-### C. Hardware workspace
-Must include:
-- subsystem status cards
-- health summary
-- device availability and capabilities
-- fault explanations
-- diagnostics entry points
-
-### D. Live Data workspace
-Must include:
-- stream selection
 - plot panels
-- metadata overlays
+- metadata overlays and saved-session target visibility
 - acquisition-rate or freshness indicators
 - event and data correlation view
+- pause, resume, and abort controls
+- fault messaging
 
-### E. Analysis workspace
+### E. Results workspace
+Must include:
+- session browser
+- search and filtering
+- report and export actions
+- artifact inventory
+- raw outputs and saved settings metadata visibility
+- replay entry points
+
+### F. Analyze workspace
 Must include:
 - raw and processed toggles
 - pipeline controls
@@ -546,14 +594,6 @@ Must include:
 - comparison tools
 - provenance display
 - saved analysis results
-
-### F. Results workspace
-Must include:
-- session browser
-- search and filtering
-- report and export actions
-- artifact inventory
-- replay entry points
 
 ### G. Service / Maintenance workspace
 Must include:
@@ -687,6 +727,7 @@ Use this in the root orchestration thread:
 We are building a new IR spectroscope control platform.
 
 Follow AGENTS.md as the product definition, REFACTOR.md as the rewrite authority, and PLANS.md as the milestone plan.
+Use docs/ui_foundation.md as the active UI foundation for current and future presentation work.
 Do not preserve the old architecture unless REFACTOR.md explicitly says to keep the underlying asset or knowledge.
 
 Approach this as a control-plane + data-plane + presentation-plane system, not a UI-only rewrite.
@@ -703,6 +744,7 @@ Task for this thread:
 Constraints:
 - no direct UI orchestration of hardware
 - no UI-owned raw data persistence or processing logic
+- finish the user-facing workflow surfaces first before speculating deeper backend detail
 - use stable contracts between packages
 - preserve reproducibility and session persistence
 - surface device faults and vendor errors explicitly
@@ -724,7 +766,7 @@ Review the repo and define the contracts and package boundaries required for the
 
 ### UI shell agent
 ```text
-Implement the product shell, route map, page scaffolds, and reusable components for Setup, Run, Hardware, Live Data, Analysis, Results, and Service. Assume typed backends and simulators are available. Do not embed orchestration, persistence, or scientific logic in the UI.
+Implement the product shell, route map, page scaffolds, and reusable components for Setup, Advanced, Calibrated, Run, Results, Analyze, and Service / Maintenance. Assume typed backends and simulators are available. Do not embed orchestration, persistence, or scientific logic in the UI. Build on the existing Python, server-rendered shell rather than assuming a frontend-stack replacement.
 ```
 
 ### Control-plane agent
@@ -762,20 +804,21 @@ Implement simulator-backed end-to-end scenarios, regression checks, and mileston
 2. package scaffolding
 3. simulator-backed Setup → Start → Run → Complete path
 4. session persistence and replay
-5. analysis and results browsing
-6. advanced and service surfaces
+5. Results and Analyze surfaces
+6. Advanced, Calibrated, and Service surfaces
 7. real-device smoke integration
 8. hardening and release preparation
 
-Do not begin with advanced device pages.
+Do not begin with speculative backend depth that no user-facing workflow needs yet.
 Do not begin with report polish.
-Do not begin with hardware-specific deep controls.
-Start with the operator golden path and the persistence model that makes it real.
+Do not begin with hardware-specific deep controls detached from the workflow surfaces.
+Start with the operator golden path and the persisted-session model that makes it real.
 
 ## 16. What “done” means for the rewrite
 The rewrite is successful only when all of the following are true:
 - standard users can verify settings and run an experiment from a simple workflow
 - expert users can reach advanced controls without contaminating the default flow
+- calibrated bench-owned truth is handled through controlled surfaces instead of ad hoc edits
 - all coordinated execution goes through the experiment engine
 - data collection, persistence, processing, analysis, and exports exist outside the UI layer
 - every run produces a durable session record
