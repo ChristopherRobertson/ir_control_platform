@@ -307,6 +307,7 @@ def _base_status(
     busy: bool = False,
     device_role: str | None = None,
     device_identity: str | None = None,
+    vendor_status: dict[str, bool | int | float | str] | None = None,
 ) -> DeviceStatus:
     return DeviceStatus(
         device_id=device_id,
@@ -319,6 +320,7 @@ def _base_status(
         status_summary=summary,
         device_role=device_role,
         device_identity=device_identity,
+        vendor_status=vendor_status or {},
     )
 
 
@@ -329,16 +331,24 @@ class SimulatedMircatDriver(MircatDriver):
         self._status = initial_status
         self._capability = _mircat_capability()
         self._configuration_counter = 0
+        self._armed = False
+        self._emission_enabled = False
+        self._scan_active = False
+        self._tuned_target_cm1: float | None = None
 
     async def connect(self) -> DeviceStatus:
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
             summary="Connected and ready for synchronized probe control.",
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
     async def disconnect(self) -> DeviceStatus:
+        self._armed = False
+        self._emission_enabled = False
+        self._scan_active = False
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
@@ -346,6 +356,7 @@ class SimulatedMircatDriver(MircatDriver):
             lifecycle_state=DeviceLifecycleState.DISCONNECTED,
             connected=False,
             ready=False,
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
@@ -357,11 +368,14 @@ class SimulatedMircatDriver(MircatDriver):
 
     async def apply_configuration(self, configuration: MircatExperimentConfiguration) -> DeviceConfiguration:
         self._configuration_counter += 1
+        self._scan_active = False
+        self._tuned_target_cm1 = configuration.single_wavelength_cm1
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
             summary=f"{configuration.spectral_mode.value} recipe applied.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
+            vendor_status=self._vendor_status(),
         )
         return DeviceConfiguration(
             configuration_id=f"mircat-qcl-cfg-{self._configuration_counter}",
@@ -380,28 +394,35 @@ class SimulatedMircatDriver(MircatDriver):
         return self._status.reported_faults
 
     async def arm(self) -> DeviceStatus:
+        self._armed = True
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
             summary="MIRcat armed and waiting for the slave trigger path.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
     async def disarm(self) -> DeviceStatus:
+        self._armed = False
+        self._scan_active = False
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
             summary="MIRcat disarmed and idle.",
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
     async def set_emission_enabled(self, enabled: bool) -> DeviceStatus:
+        self._emission_enabled = enabled
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
             summary=f"Emission {'enabled' if enabled else 'disabled'}.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
@@ -410,6 +431,8 @@ class SimulatedMircatDriver(MircatDriver):
         configuration: MircatExperimentConfiguration,
         probe_timing_mode: ProbeTimingMode,
     ) -> DeviceStatus:
+        self._scan_active = True
+        self._tuned_target_cm1 = configuration.single_wavelength_cm1
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
@@ -419,17 +442,30 @@ class SimulatedMircatDriver(MircatDriver):
             lifecycle_state=DeviceLifecycleState.RUNNING,
             ready=False,
             busy=True,
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
     async def stop_recipe(self) -> DeviceStatus:
+        self._scan_active = False
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
             summary="MIRcat recipe stopped.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
+            vendor_status=self._vendor_status(),
         )
         return self._status
+
+    def _vendor_status(self) -> dict[str, bool | int | float | str]:
+        vendor_status: dict[str, bool | int | float | str] = {
+            "armed": self._armed,
+            "emission_enabled": self._emission_enabled,
+            "scan_active": self._scan_active,
+        }
+        if self._tuned_target_cm1 is not None:
+            vendor_status["tuned_target_cm1"] = self._tuned_target_cm1
+        return vendor_status
 
 
 class SimulatedHF2Driver(LabOneHF2Driver):
@@ -440,16 +476,24 @@ class SimulatedHF2Driver(LabOneHF2Driver):
         self._capability = _hf2_capability()
         self._configuration_counter = 0
         self._active_faults = active_faults
+        self._capture_active = False
+        self._demod_index = 0
+        self._component = HF2SampleComponent.R.value
+        self._sample_rate_hz = 0.0
+        self._harmonic = 1
+        self._capture_interval_seconds = 0.0
 
     async def connect(self) -> DeviceStatus:
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
             summary="Connected and ready for primary HF2 acquisition.",
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
     async def disconnect(self) -> DeviceStatus:
+        self._capture_active = False
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
@@ -457,6 +501,7 @@ class SimulatedHF2Driver(LabOneHF2Driver):
             lifecycle_state=DeviceLifecycleState.DISCONNECTED,
             connected=False,
             ready=False,
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
@@ -468,11 +513,18 @@ class SimulatedHF2Driver(LabOneHF2Driver):
 
     async def apply_configuration(self, configuration: HF2PrimaryAcquisition) -> DeviceConfiguration:
         self._configuration_counter += 1
+        self._capture_active = False
+        self._demod_index = configuration.demodulators[0].demod_index
+        self._component = configuration.stream_selections[0].component.value
+        self._sample_rate_hz = configuration.demodulators[0].sample_rate_hz
+        self._harmonic = configuration.demodulators[0].harmonic
+        self._capture_interval_seconds = configuration.capture_interval_seconds
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
             summary="HF2 primary acquisition configured.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
+            vendor_status=self._vendor_status(),
         )
         return DeviceConfiguration(
             configuration_id=f"hf2li-primary-cfg-{self._configuration_counter}",
@@ -489,6 +541,7 @@ class SimulatedHF2Driver(LabOneHF2Driver):
         return self._active_faults
 
     async def start_capture(self, recipe: HF2PrimaryAcquisition, session_id: str) -> HF2CaptureHandle:
+        self._capture_active = True
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
@@ -496,6 +549,7 @@ class SimulatedHF2Driver(LabOneHF2Driver):
             lifecycle_state=DeviceLifecycleState.RUNNING,
             ready=False,
             busy=True,
+            vendor_status=self._vendor_status(),
         )
         return HF2CaptureHandle(
             capture_id=f"{session_id}-hf2-capture",
@@ -508,11 +562,13 @@ class SimulatedHF2Driver(LabOneHF2Driver):
         )
 
     async def stop_capture(self, capture_id: str) -> DeviceStatus:
+        self._capture_active = False
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
             summary="HF2 capture stopped. Primary raw artifacts are available.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
+            vendor_status=self._vendor_status(),
         )
         return self._status
 
@@ -522,8 +578,19 @@ class SimulatedHF2Driver(LabOneHF2Driver):
             device_kind=self.device_kind,
             summary=f"Demodulator {demod_index} phase zeroed.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
+            vendor_status=self._vendor_status(),
         )
         return self._status
+
+    def _vendor_status(self) -> dict[str, bool | int | float | str]:
+        return {
+            "capture_active": self._capture_active,
+            "demod_index": self._demod_index,
+            "component": self._component,
+            "sample_rate_hz": self._sample_rate_hz,
+            "harmonic": self._harmonic,
+            "capture_interval_seconds": self._capture_interval_seconds,
+        }
 
 
 class SimulatedT660Driver(T660TimingDriver):

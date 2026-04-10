@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ircp_contracts import (
     ArtifactSourceRole,
+    HF2DemodulatorConfiguration,
+    HF2PrimaryAcquisition,
+    HF2SampleComponent,
+    HF2StreamSelection,
+    MircatSpectralMode,
     PreflightReport,
     RunEventType,
     RunFailureReason,
@@ -18,6 +24,7 @@ from ircp_contracts import (
 )
 from ircp_data_pipeline import (
     FilesystemSessionStore,
+    InMemorySessionStore,
     SessionCatalog,
     SessionDetail,
     SessionOpenRequest,
@@ -28,28 +35,26 @@ from ircp_experiment_engine import SupportedV1DriverBundle
 from ircp_experiment_engine.runtime import SupportedV1PreflightValidator, InMemoryRunCoordinator
 from ircp_simulators import Phase3BScenarioContext, SupportedV1SimulatorCatalog
 from ircp_ui_shell import (
+    ActionButtonModel,
+    AdvancedPageModel,
+    AdvancedSectionModel,
     AnalyzePageModel,
     CalloutModel,
     DeviceSummaryCard,
     EventLogItem,
     FormFieldModel,
     FormOptionModel,
-    FormSectionModel,
     HeaderStatus,
-    LiveDataPointModel,
-    LiveDataSeries,
     NavigationItem,
+    OperatePageModel,
+    OperatePanelModel,
     PageStateModel,
-    ReadinessRow,
     ResultsPageModel,
-    RunPageModel,
-    RunStepSummary,
     ScenarioOption,
-    SectionHeader,
     ServicePageModel,
     SessionSummaryCard,
-    SetupPageModel,
     StatusBadge,
+    StatusItemModel,
     SummaryPanel,
     TableModel,
     UiRuntimeGateway,
@@ -60,6 +65,19 @@ from ircp_ui_shell.page_state import blocked_state, empty_state, fault_state, un
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@dataclass
+class OperatorDraftState:
+    session_label: str
+    sample_id: str
+    operator_notes: str
+    tune_target_cm1: float
+    hf2_demod_index: int
+    hf2_component: HF2SampleComponent
+    hf2_sample_rate_hz: float
+    hf2_harmonic: int
+    hf2_capture_interval_seconds: float
 
 
 class Phase3BSimulatorRuntime(UiRuntimeGateway):
@@ -86,8 +104,26 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
         self._coordinator = coordinator
         self._storage_root = storage_root.resolve()
         self._last_preflight: PreflightReport | None = None
+        initial_hf2 = scenario.recipe.hf2_primary_acquisition
+        initial_component = initial_hf2.stream_selections[0].component
+        initial_demod = initial_hf2.demodulators[0]
+        self._draft = OperatorDraftState(
+            session_label=scenario.recipe.session_label or "Supported v1 simulator baseline",
+            sample_id="sample-A12",
+            operator_notes="Simulator-backed operator review session.",
+            tune_target_cm1=_default_tune_target(scenario),
+            hf2_demod_index=initial_demod.demod_index,
+            hf2_component=initial_component,
+            hf2_sample_rate_hz=initial_demod.sample_rate_hz,
+            hf2_harmonic=initial_demod.harmonic,
+            hf2_capture_interval_seconds=initial_hf2.capture_interval_seconds,
+        )
         self._active_run_id: str | None = None
+        self._draft_session_id: str | None = None
         self._selected_session_id: str | None = None
+        self._active_hf2_capture_id: str | None = None
+        self._recent_activity: list[EventLogItem] = []
+        self._preflight_dirty = True
 
     async def get_header_status(self, active_route: str) -> HeaderStatus:
         sessions = await self._session_catalog.list_sessions()
@@ -107,8 +143,9 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                 tone=self._run_badge_tone(run_phase_label),
             ),
         )
+        current_session = self._draft_session_id or self._selected_session_id or "none"
         return HeaderStatus(
-            title="IR Control Platform Phase 3B",
+            title="IR Control Platform",
             active_route=active_route,
             scenario_options=tuple(
                 ScenarioOption(
@@ -121,14 +158,9 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
             ),
             navigation=(
                 NavigationItem(
-                    label="Setup",
-                    href=f"/setup?scenario={self._scenario.scenario_id}",
-                    active=active_route == "setup",
-                ),
-                NavigationItem(
-                    label="Run",
-                    href=f"/run?scenario={self._scenario.scenario_id}",
-                    active=active_route == "run",
+                    label="Operate",
+                    href=f"/operate?scenario={self._scenario.scenario_id}",
+                    active=active_route == "operate",
                 ),
                 NavigationItem(
                     label="Results",
@@ -136,9 +168,9 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                     active=active_route == "results",
                 ),
                 NavigationItem(
-                    label="Analyze",
-                    href=f"/analyze?scenario={self._scenario.scenario_id}",
-                    active=active_route == "analyze",
+                    label="Advanced",
+                    href=f"/advanced?scenario={self._scenario.scenario_id}",
+                    active=active_route == "advanced",
                 ),
                 NavigationItem(
                     label="Service",
@@ -146,148 +178,118 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                     active=active_route == "service",
                 ),
             ),
-            badges=badges,
+            badges=(
+                badges[0],
+                StatusBadge(label=f"Current Session {current_session}", tone="neutral"),
+                badges[2],
+            ),
             summary=self._scenario.description,
         )
 
-    async def get_setup_page(self, surface: str = "setup") -> SetupPageModel:
+    async def get_operate_page(self) -> OperatePageModel:
         preflight = await self._ensure_preflight()
-        warning_messages = tuple(
-            issue.message
-            for check in preflight.checks
-            for issue in check.issues
-            if not issue.blocking
-        )
-        blocking_messages = tuple(
-            issue.message
-            for check in preflight.checks
-            for issue in check.issues
-            if issue.blocking
-        )
-        page_state: PageStateModel | None = None
-        if blocking_messages:
-            page_state = blocked_state(
-                f"{self._setup_surface_title(surface)} blocked",
-                "One or more required checks are blocking the supported-v1 workflow.",
-                details=blocking_messages,
-            )
-        elif warning_messages:
-            page_state = warning_state(
-                f"{self._setup_surface_title(surface)} warning",
-                "The primary path can proceed, but optional monitoring or review surfaces are degraded.",
-                details=warning_messages,
-            )
-        return SetupPageModel(
-            title=self._setup_surface_title(surface),
-            subtitle=self._setup_surface_subtitle(surface),
-            state=page_state,
-            surface_navigation=self._setup_surface_navigation(surface),
-            surface_badges=self._surface_badges(surface),
-            recipe_title=self._scenario.recipe.title,
-            preset_name=self._scenario.preset.name,
-            section_header=SectionHeader(
-                title="Device Readiness",
-                subtitle="Normalized summaries from the typed adapter boundary across the visible workflow.",
-            ),
-            summary_panels=self._summary_panels_from_preflight(preflight),
-            form_sections=self._setup_form_sections(surface),
-            device_cards=await self._device_cards(),
-            readiness_rows=tuple(
-                ReadinessRow(
-                    label=check.target,
-                    state=check.state.value,
-                    summary=check.summary,
-                    details=tuple(issue.message for issue in check.issues),
-                )
-                for check in preflight.checks
-            ),
-            callouts=self._setup_callouts(surface, preflight),
-            tables=self._setup_tables(surface, preflight),
-            preflight_report=preflight,
+        latest_state = await self._latest_run_state()
+        operate_state = self._operate_page_state(preflight, latest_state)
+        sessions = await self._session_catalog.list_sessions()
+        laser_status = await self._scenario.bundle.mircat.get_status()
+        hf2_status = await self._scenario.bundle.hf2li.get_status()
+
+        return OperatePageModel(
+            title="Operate",
+            subtitle="Start with the current session, make the required device states obvious, then run the supported path.",
+            state=operate_state,
+            surface_badges=self._surface_badges("operate"),
+            session_panel=self._build_session_panel(sessions),
+            laser_panel=self._build_laser_panel(laser_status),
+            acquisition_panel=self._build_acquisition_panel(hf2_status),
+            run_panel=self._build_run_panel(preflight, latest_state),
+            live_status=await self._live_status_items(preflight),
+            recent_activity=await self._recent_activity_items(),
+            callouts=(),
         )
 
-    async def get_run_page(self) -> RunPageModel:
-        if self._active_run_id is None:
-            preflight = await self._ensure_preflight()
-            state: PageStateModel | None
-            if preflight.ready_to_start:
-                state = unavailable_state(
-                    "Run not started",
-                    "The supported-v1 runtime is ready, but no run has been started yet.",
-                    details=("Use Start Run to materialize the authoritative run timeline.",),
-                )
-            else:
-                state = blocked_state(
-                    "Run blocked",
-                    "The run scaffold remains blocked until Setup passes preflight.",
-                    details=tuple(
-                        issue.message
-                        for check in preflight.checks
-                        for issue in check.issues
-                        if issue.blocking
+    async def get_advanced_page(self) -> AdvancedPageModel:
+        preflight = await self._ensure_preflight()
+        readiness_rows = tuple(
+            (
+                check.target,
+                check.state.value,
+                check.summary,
+                "; ".join(issue.message for issue in check.issues) if check.issues else "No issues",
+            )
+            for check in preflight.checks
+        )
+        calibration = self._scenario.recipe.calibration_references[0] if self._scenario.recipe.calibration_references else None
+        mapping = self._scenario.recipe.time_to_wavenumber_mapping
+        advanced_state = self._preflight_page_state(
+            preflight,
+            title="Advanced detail blocked",
+            warning_title="Advanced detail warning",
+        )
+        return AdvancedPageModel(
+            title="Advanced",
+            subtitle="Timing, routing, calibration, and readiness detail stays here instead of crowding the operator path.",
+            state=advanced_state,
+            surface_badges=self._surface_badges("advanced"),
+            sections=(
+                AdvancedSectionModel(
+                    title="Timing and marker detail",
+                    subtitle="T0 timing, pump/probe relationships, and selected markers for the current supported recipe.",
+                    summary_panels=(
+                        self._summary_panels_from_preflight(preflight)[1],
+                        self._summary_panels_from_preflight(preflight)[2],
+                        self._summary_panels_from_preflight(preflight)[3],
                     ),
-                )
-            return RunPageModel(
-                title="Run",
-                subtitle="Authoritative run state, preflight gating, event visibility, and live data context.",
-                state=state,
-                surface_badges=self._surface_badges("run"),
-                section_header=SectionHeader(
-                    title="Run Progression",
-                    subtitle="The timeline shows the one canonical coordinated run flow.",
+                    open_by_default=True,
                 ),
-                run_id=None,
-                run_phase_label="Not started",
-                session_id=None,
-                summary_panels=self._summary_panels_from_preflight(preflight),
-                callouts=self._run_callouts(preflight=preflight),
-                tables=self._run_tables(preflight=preflight),
-                event_log=(),
-                primary_live_data=(),
-                secondary_live_data=(),
-                run_steps=(),
-            )
-
-        timeline = await self._run_monitor.get_run_timeline(self._active_run_id)
-        final_state = timeline.states[-1]
-        detail = (
-            await self._session_catalog.get_session_detail(final_state.session_id)
-            if final_state.session_id is not None
-            else None
-        )
-        state: PageStateModel | None = None
-        if final_state.phase == RunPhase.FAULTED:
-            state = fault_state(
-                "Run faulted",
-                "The simulator surfaced an explicit device fault on the canonical path.",
-                details=(final_state.latest_fault.message,) if final_state.latest_fault else (),
-            )
-        elif final_state.phase == RunPhase.ABORTED:
-            state = warning_state(
-                "Run aborted",
-                "The persisted session remains available even though the run ended early.",
-                details=(final_state.failure_reason.value,) if final_state.failure_reason else (),
-            )
-        primary_live_data, secondary_live_data = await self.get_live_data(timeline.run_id)
-        return RunPageModel(
-            title="Run",
-            subtitle="Authoritative run state, event log, timing summary, and live data surfaces.",
-            state=state,
-            surface_badges=self._surface_badges("run"),
-            section_header=SectionHeader(
-                title="Run Progression",
-                subtitle="The UI reads authoritative run state instead of owning it.",
+                AdvancedSectionModel(
+                    title="Acquisition and routing detail",
+                    subtitle="HF2 profile, Pico monitoring selection, and named MUX routing kept out of the main operator flow.",
+                    summary_panels=(
+                        self._summary_panels_from_preflight(preflight)[0],
+                        self._summary_panels_from_preflight(preflight)[4],
+                        self._summary_panels_from_preflight(preflight)[5],
+                    ),
+                ),
+                AdvancedSectionModel(
+                    title="Calibration and guarded defaults",
+                    subtitle="Bench-owned references that exist now but should not dominate routine operation.",
+                    summary_panels=(
+                        SummaryPanel(
+                            title="Calibration context",
+                            subtitle="The current reviewable calibration and mapping inputs.",
+                            items=(
+                                f"Calibration reference: {calibration.calibration_id if calibration else 'none'}",
+                                f"Calibration version: {calibration.version if calibration else 'none'}",
+                                f"Time-to-wavenumber mapping: {mapping.mapping_id if mapping else 'none'}",
+                                f"Mapping scan speed: {mapping.scan_speed_cm1_per_s if mapping else 'n/a'}",
+                            ),
+                        ),
+                    ),
+                    notes=(
+                        "These values are visible for review and provenance, not routine operator editing.",
+                    ),
+                ),
+                AdvancedSectionModel(
+                    title="Readiness detail",
+                    subtitle="The explicit preflight checks that used to crowd the landing experience.",
+                    tables=(
+                        TableModel(
+                            title="Readiness Matrix",
+                            subtitle="Control-plane preflight remains the source for blocked, warning, and ready states.",
+                            headers=("Target", "State", "Summary", "Issues"),
+                            rows=readiness_rows,
+                        ),
+                    ),
+                ),
             ),
-            run_id=timeline.run_id,
-            run_phase_label=final_state.phase.value,
-            session_id=final_state.session_id,
-            summary_panels=self._summary_panels_from_run_state(final_state),
-            callouts=self._run_callouts(preflight=final_state.preflight, detail=detail, final_state=final_state),
-            tables=self._run_tables(preflight=final_state.preflight, detail=detail),
-            event_log=await self.get_run_events(timeline.run_id),
-            primary_live_data=primary_live_data,
-            secondary_live_data=secondary_live_data,
-            run_steps=await self.get_run_steps(timeline.run_id),
+            callouts=(
+                CalloutModel(
+                    title="Expert-only detail moved out of Operate",
+                    body="Timing, routing, calibration, and readiness inspection still exists, but it no longer leads the first five minutes of use.",
+                    tone="info",
+                ),
+            ),
         )
 
     async def get_results_page(self, selected_session_id: str | None = None) -> ResultsPageModel:
@@ -317,6 +319,7 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
         page_state = None
         detail_panels: tuple[SummaryPanel, ...] = ()
         artifact_panels: tuple[SummaryPanel, ...] = ()
+        storage_panels: tuple[SummaryPanel, ...] = ()
         event_log: tuple[EventLogItem, ...] = ()
         selected_session = next((card for card in session_cards if card.session_id == selected_id), None)
         if not session_cards:
@@ -329,6 +332,18 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
             detail = await self._session_catalog.get_session_detail(selected_id)
             detail_panels = self._detail_panels_from_session_detail(detail)
             artifact_panels = self._artifact_panels_from_session_detail(detail)
+            storage_panels = (
+                SummaryPanel(
+                    title="Saved paths",
+                    subtitle="Basic durable session details available now.",
+                    items=(
+                        f"Session directory: {self._session_dir(selected_id)}",
+                        f"Manifest: {self._manifest_path(selected_id)}",
+                        f"Events: {self._events_path(selected_id)}",
+                        f"Replay ready: {'yes' if detail.summary.replay_ready else 'no'}",
+                    ),
+                ),
+            )
             event_log = tuple(
                 EventLogItem(
                     timestamp=event.emitted_at,
@@ -365,19 +380,15 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
 
         return ResultsPageModel(
             title="Results",
-            subtitle="Saved session summaries with persisted outcome, timing, artifact, and event context.",
+            subtitle="Review saved sessions, raw artifacts, and human-readable provenance without turning this into an analysis workstation.",
             state=page_state,
             surface_badges=self._surface_badges("results"),
-            section_header=SectionHeader(
-                title="Session Catalog",
-                subtitle="Reopen uses the session boundary only. The UI does not own persistence.",
-            ),
             sessions=session_cards,
             selected_session=selected_session,
             detail_panels=detail_panels,
             artifact_panels=artifact_panels,
+            storage_panels=storage_panels if selected_id is not None else (),
             callouts=self._results_callouts(selected_id, page_state),
-            tables=self._results_tables(selected_id),
             event_log=event_log,
         )
 
@@ -407,7 +418,6 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
 
         page_state: PageStateModel | None = None
         summary_panels: tuple[SummaryPanel, ...] = ()
-        form_sections: tuple[FormSectionModel, ...] = ()
         callouts: tuple[CalloutModel, ...] = ()
         tables: tuple[TableModel, ...] = ()
         selected_session = next((card for card in session_cards if card.session_id == selected_id), None)
@@ -421,7 +431,6 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
         elif selected_id is not None:
             detail = await self._session_catalog.get_session_detail(selected_id)
             summary_panels = self._analyze_summary_panels(detail)
-            form_sections = self._analyze_form_sections(detail)
             callouts = self._analyze_callouts(detail)
             tables = self._analyze_tables(detail)
             if not detail.summary.replay_ready:
@@ -439,41 +448,27 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
 
         return AnalyzePageModel(
             title="Analyze",
-            subtitle="Persisted-session scientific review, reprocessing setup, and explicit analysis scaffolding.",
+            subtitle="Secondary persisted-session review surface. Real inputs are shown clearly; deeper analysis wiring remains separate.",
             state=page_state,
             surface_badges=self._surface_badges("analyze"),
-            section_header=SectionHeader(
-                title="Persisted Session Sources",
-                subtitle="Analyze starts from saved session truth rather than live runtime memory.",
-            ),
             sessions=session_cards,
             selected_session=selected_session,
             summary_panels=summary_panels,
-            form_sections=form_sections,
-            callouts=callouts,
             tables=tables,
+            callouts=callouts,
         )
 
     async def get_service_page(self) -> ServicePageModel:
         sessions = await self._session_catalog.list_sessions()
         return ServicePageModel(
             title="Service",
-            subtitle="Expert-only diagnostics, storage visibility, and guarded recovery scaffolding.",
+            subtitle="Expert-only diagnostics, maintenance visibility, and guarded service context.",
             state=unavailable_state(
                 "Service scaffold only",
                 "This pass exposes expert review surfaces and guarded placeholders, not raw vendor consoles.",
             ),
             surface_badges=self._surface_badges("service"),
-            section_header=SectionHeader(
-                title="Connected Devices",
-                subtitle="Read-only summaries for diagnostics and maintenance review.",
-            ),
             device_cards=await self._device_cards(),
-            notes=(
-                "Nd:YAG timing stays modeled through T660-2 timing semantics, not a separate console.",
-                "The MUX remains a route selector rather than a manual combiner surface.",
-                "Recovery and calibration actions stay out of the default Setup and Run flow.",
-            ),
             diagnostic_panels=(
                 SummaryPanel(
                     title="Timing Roles",
@@ -493,10 +488,563 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
                     ),
                 ),
             ),
-            form_sections=self._service_form_sections(),
-            callouts=self._service_callouts(len(sessions)),
+            callouts=(
+                CalloutModel(
+                    title="Service stays out of the main path",
+                    body="Diagnostics and bench-owned recovery remain separate so normal operation can stay compact and task-oriented.",
+                    tone="warn",
+                ),
+                *self._service_callouts(len(sessions)),
+            ),
             tables=self._service_tables(len(sessions)),
         )
+
+    async def save_session(self, session_label: str, sample_id: str, operator_notes: str) -> SessionManifest:
+        self._draft.session_label = session_label.strip() or self._draft.session_label
+        self._draft.sample_id = sample_id.strip()
+        self._draft.operator_notes = operator_notes.strip()
+        manifest = await self._coordinator.create_session(
+            self._current_recipe(),
+            self._scenario.preset,
+            notes=self._current_session_notes(),
+        )
+        self._draft_session_id = manifest.session_id
+        self._selected_session_id = manifest.session_id
+        self._active_hf2_capture_id = None
+        self._remember_activity("session", f"Saved planned session {manifest.session_id}.", tone="good")
+        self._mark_preflight_dirty()
+        return manifest
+
+    async def open_saved_session(self, session_id: str) -> SessionManifest:
+        result = await self._session_replayer.open_session(
+            SessionOpenRequest(
+                session_id=session_id,
+                requested_at=_utc_now(),
+                reopen_for_replay=True,
+            )
+        )
+        self._selected_session_id = result.manifest.session_id
+        self._draft_session_id = None
+        self._load_draft_from_manifest(result.manifest)
+        self._remember_activity("session", f"Opened saved session {session_id}.", tone="info")
+        return result.manifest
+
+    async def connect_laser(self):
+        status = await self._scenario.bundle.mircat.connect()
+        self._remember_activity("laser", status.status_summary, tone="good")
+        self._mark_preflight_dirty()
+        return status
+
+    async def disconnect_laser(self):
+        status = await self._scenario.bundle.mircat.disconnect()
+        self._remember_activity("laser", status.status_summary, tone="warn")
+        self._mark_preflight_dirty()
+        return status
+
+    async def arm_laser(self):
+        status = await self._scenario.bundle.mircat.arm()
+        self._remember_activity("laser", status.status_summary, tone="good")
+        self._mark_preflight_dirty()
+        return status
+
+    async def disarm_laser(self):
+        status = await self._scenario.bundle.mircat.disarm()
+        self._remember_activity("laser", status.status_summary, tone="warn")
+        self._mark_preflight_dirty()
+        return status
+
+    async def set_laser_emission(self, enabled: bool):
+        status = await self._scenario.bundle.mircat.set_emission_enabled(enabled)
+        self._remember_activity("laser", status.status_summary, tone="good" if enabled else "warn")
+        self._mark_preflight_dirty()
+        return status
+
+    async def tune_laser(self, target_wavenumber_cm1: float):
+        self._draft.tune_target_cm1 = target_wavenumber_cm1
+        tuned_configuration = replace(
+            self._scenario.recipe.mircat,
+            spectral_mode=MircatSpectralMode.SINGLE_WAVELENGTH,
+            single_wavelength_cm1=target_wavenumber_cm1,
+            sweep_scan=None,
+            step_measure_scan=None,
+            multispectral_scan=None,
+        )
+        snapshot = await self._scenario.bundle.mircat.apply_configuration(tuned_configuration)
+        self._remember_activity(
+            "laser",
+            f"Tune target set to {target_wavenumber_cm1:.2f} cm^-1.",
+            tone="info",
+        )
+        self._mark_preflight_dirty()
+        return snapshot
+
+    async def start_scan(self):
+        status = await self._scenario.bundle.mircat.start_recipe(
+            self._scenario.recipe.mircat,
+            self._scenario.recipe.probe_timing_mode,
+        )
+        self._remember_activity("laser", status.status_summary, tone="good")
+        self._mark_preflight_dirty()
+        return status
+
+    async def stop_scan(self):
+        status = await self._scenario.bundle.mircat.stop_recipe()
+        self._remember_activity("laser", status.status_summary, tone="warn")
+        self._mark_preflight_dirty()
+        return status
+
+    async def connect_hf2(self):
+        status = await self._scenario.bundle.hf2li.connect()
+        self._remember_activity("hf2li", status.status_summary, tone="good")
+        self._mark_preflight_dirty()
+        return status
+
+    async def disconnect_hf2(self):
+        status = await self._scenario.bundle.hf2li.disconnect()
+        self._active_hf2_capture_id = None
+        self._remember_activity("hf2li", status.status_summary, tone="warn")
+        self._mark_preflight_dirty()
+        return status
+
+    async def start_hf2_acquisition(
+        self,
+        *,
+        demod_index: int,
+        component: HF2SampleComponent,
+        sample_rate_hz: float,
+        harmonic: int,
+        capture_interval_seconds: float,
+    ):
+        self._draft.hf2_demod_index = demod_index
+        self._draft.hf2_component = component
+        self._draft.hf2_sample_rate_hz = sample_rate_hz
+        self._draft.hf2_harmonic = harmonic
+        self._draft.hf2_capture_interval_seconds = capture_interval_seconds
+        if self._draft_session_id is None:
+            raise ValueError("Save a session before starting standalone acquisition.")
+        acquisition = self._current_hf2_acquisition()
+        await self._scenario.bundle.hf2li.apply_configuration(acquisition)
+        capture = await self._scenario.bundle.hf2li.start_capture(acquisition, self._draft_session_id)
+        self._active_hf2_capture_id = capture.capture_id
+        self._remember_activity("hf2li", f"Started HF2 acquisition for session {self._draft_session_id}.", tone="good")
+        self._mark_preflight_dirty()
+        return capture
+
+    async def stop_hf2_acquisition(self):
+        if self._active_hf2_capture_id is None:
+            return None
+        status = await self._scenario.bundle.hf2li.stop_capture(self._active_hf2_capture_id)
+        self._active_hf2_capture_id = None
+        self._remember_activity("hf2li", status.status_summary, tone="info")
+        self._mark_preflight_dirty()
+        return status
+
+    async def run_preflight(self) -> PreflightReport:
+        self._last_preflight = await self._preflight_validator.validate(
+            self._current_recipe(),
+            self._scenario.preset,
+            SupportedV1DriverBundle(
+                mircat=self._scenario.bundle.mircat,
+                hf2li=self._scenario.bundle.hf2li,
+                t660_master=self._scenario.bundle.t660_master,
+                t660_slave=self._scenario.bundle.t660_slave,
+                mux=self._scenario.bundle.mux,
+                picoscope=self._scenario.bundle.picoscope,
+            ),
+        )
+        self._preflight_dirty = False
+        self._remember_activity(
+            "preflight",
+            f"Preflight {'ready' if self._last_preflight.ready_to_start else 'blocked'}.",
+            tone="good" if self._last_preflight.ready_to_start else "warn",
+        )
+        return self._last_preflight
+
+    async def start_run(self) -> RunState:
+        preflight = await self._ensure_preflight()
+        if not preflight.ready_to_start:
+            raise ValueError("Preflight is blocked.")
+        session_id = self._draft_session_id
+        if session_id is None:
+            manifest = await self.save_session(
+                self._draft.session_label,
+                self._draft.sample_id,
+                self._draft.operator_notes,
+            )
+            session_id = manifest.session_id
+        run_state = await self._coordinator.start_run(
+            self._current_recipe(),
+            self._scenario.preset,
+            session_id,
+        )
+        self._active_run_id = run_state.run_id
+        self._selected_session_id = run_state.session_id
+        self._remember_activity("run", f"Started run {run_state.run_id}.", tone="good")
+        self._mark_preflight_dirty()
+        return run_state
+
+    async def abort_active_run(self) -> RunState | None:
+        if self._active_run_id is None:
+            return None
+        current = await self._coordinator.get_run_state(self._active_run_id)
+        if current.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED}:
+            return None
+        aborted = await self._coordinator.abort_run(self._active_run_id, RunFailureReason.OPERATOR_ABORT)
+        self._remember_activity("run", f"Aborted run {aborted.run_id}.", tone="warn")
+        self._mark_preflight_dirty()
+        return aborted
+
+    def _build_session_panel(self, sessions) -> OperatePanelModel:
+        recent_session_options = tuple(
+            FormOptionModel(
+                value=session.session_id,
+                label=f"{session.session_id} ({session.status.value})",
+                selected=session.session_id == self._selected_session_id,
+            )
+            for session in sessions[:5]
+        )
+        current_session_id = self._draft_session_id or self._selected_session_id or "none"
+        current_status = self._current_session_status_label(sessions)
+        return OperatePanelModel(
+            title="Session",
+            subtitle="Name the work, keep the sample visible, and decide what session record you are operating in.",
+            fields=(
+                FormFieldModel(
+                    name="session_label",
+                    label="Session name / label",
+                    field_type="text",
+                    value=self._draft.session_label,
+                    help_text="Used for the current planned run session.",
+                ),
+                FormFieldModel(
+                    name="sample_id",
+                    label="Sample ID",
+                    field_type="text",
+                    value=self._draft.sample_id,
+                    help_text="Small operator-facing identifier for the current review pass.",
+                ),
+                FormFieldModel(
+                    name="operator_notes",
+                    label="Operator notes",
+                    field_type="textarea",
+                    value=self._draft.operator_notes,
+                    help_text="Persisted as session notes when the session is saved.",
+                ),
+                FormFieldModel(
+                    name="session_id",
+                    label="Open recent session",
+                    field_type="select",
+                    options=recent_session_options,
+                    disabled=not bool(recent_session_options),
+                    help_text="Limited recent list for quick reopen during local review.",
+                ),
+            ),
+            actions=(
+                ActionButtonModel(label="Save Session", action="/operate/session/save"),
+                ActionButtonModel(
+                    label="Open Recent",
+                    action="/operate/session/open",
+                    tone="secondary",
+                    disabled=not bool(recent_session_options),
+                ),
+            ),
+            status_items=(
+                StatusItemModel("Current session", current_session_id, tone="info", detail=f"Status: {current_status}"),
+                StatusItemModel(
+                    "Saved sessions",
+                    str(len(sessions)),
+                    tone="neutral",
+                    detail="Results shows the full saved-session review path.",
+                ),
+            ),
+        )
+
+    def _build_laser_panel(self, status) -> OperatePanelModel:
+        armed = _bool_vendor_status(status, "armed")
+        emission = _bool_vendor_status(status, "emission_enabled")
+        scan_active = _bool_vendor_status(status, "scan_active")
+        tuned = status.vendor_status.get("tuned_target_cm1")
+        return OperatePanelModel(
+            title="Laser",
+            subtitle="Connect, make the MIRcat state explicit, and keep routine actions next to the current status.",
+            fields=(
+                FormFieldModel(
+                    name="tune_target_cm1",
+                    label="Tune target (cm^-1)",
+                    field_type="number",
+                    value=f"{self._draft.tune_target_cm1:.2f}",
+                    help_text="Uses the repo’s current wavenumber convention.",
+                ),
+            ),
+            actions=(
+                ActionButtonModel("Connect", "/operate/laser/connect", disabled=status.connected),
+                ActionButtonModel("Disconnect", "/operate/laser/disconnect", tone="secondary", disabled=not status.connected),
+                ActionButtonModel("Arm", "/operate/laser/arm", disabled=not status.connected or armed),
+                ActionButtonModel("Disarm", "/operate/laser/disarm", tone="secondary", disabled=not status.connected or not armed),
+                ActionButtonModel("Emission On", "/operate/laser/emission/on", disabled=not status.connected or emission),
+                ActionButtonModel("Emission Off", "/operate/laser/emission/off", tone="secondary", disabled=not status.connected or not emission),
+                ActionButtonModel("Tune", "/operate/laser/tune", tone="ghost", disabled=not status.connected),
+                ActionButtonModel("Start Scan", "/operate/laser/scan/start", disabled=not status.connected or scan_active),
+                ActionButtonModel("Stop Scan", "/operate/laser/scan/stop", tone="secondary", disabled=not status.connected or not scan_active),
+            ),
+            status_items=(
+                StatusItemModel("Connection", "Connected" if status.connected else "Disconnected", tone="good" if status.connected else "bad", detail=status.status_summary),
+                StatusItemModel("Armed", "Armed" if armed else "Disarmed", tone="good" if armed else "neutral"),
+                StatusItemModel("Emission", "On" if emission else "Off", tone="good" if emission else "neutral"),
+                StatusItemModel(
+                    "Laser state",
+                    "Scan active" if scan_active else ("Tuned" if tuned is not None else "Idle"),
+                    tone="info" if tuned is not None or scan_active else "neutral",
+                    detail=f"Target {tuned:.2f} cm^-1" if isinstance(tuned, (float, int)) else status.status_summary,
+                ),
+            ),
+        )
+
+    def _build_acquisition_panel(self, status) -> OperatePanelModel:
+        connected = status.connected
+        acquisition_ready = self._draft_session_id is not None and connected
+        capture_active = _bool_vendor_status(status, "capture_active")
+        return OperatePanelModel(
+            title="HF2LI / Acquisition",
+            subtitle="Expose only the small operator-meaningful subset needed for the MVP.",
+            fields=(
+                FormFieldModel(
+                    name="hf2_demod_index",
+                    label="Demodulator",
+                    field_type="number",
+                    value=str(self._draft.hf2_demod_index),
+                    help_text="Current operator-facing demodulator selection.",
+                ),
+                FormFieldModel(
+                    name="hf2_component",
+                    label="Signal component",
+                    field_type="select",
+                    options=tuple(
+                        FormOptionModel(value=component.value, label=component.value.upper(), selected=component == self._draft.hf2_component)
+                        for component in (
+                            HF2SampleComponent.R,
+                            HF2SampleComponent.X,
+                            HF2SampleComponent.Y,
+                            HF2SampleComponent.PHASE,
+                        )
+                    ),
+                    help_text="Kept intentionally small for the MVP.",
+                ),
+                FormFieldModel(
+                    name="hf2_sample_rate_hz",
+                    label="Sample rate (Hz)",
+                    field_type="number",
+                    value=f"{self._draft.hf2_sample_rate_hz:.0f}",
+                    help_text="Maps directly to the supported HF2 demodulator configuration.",
+                ),
+                FormFieldModel(
+                    name="hf2_harmonic",
+                    label="Harmonic",
+                    field_type="number",
+                    value=str(self._draft.hf2_harmonic),
+                    help_text="The smallest cleanly supported harmonic control in the current contract.",
+                ),
+                FormFieldModel(
+                    name="hf2_capture_interval_seconds",
+                    label="Capture interval (s)",
+                    field_type="number",
+                    value=f"{self._draft.hf2_capture_interval_seconds:.2f}",
+                    help_text="Current primary acquisition interval for simulator-backed review.",
+                ),
+            ),
+            actions=(
+                ActionButtonModel("Connect HF2LI", "/operate/hf2/connect", disabled=connected),
+                ActionButtonModel("Disconnect HF2LI", "/operate/hf2/disconnect", tone="secondary", disabled=not connected),
+                ActionButtonModel(
+                    "Start Acquisition",
+                    "/operate/hf2/start",
+                    disabled=not acquisition_ready or capture_active,
+                    helper_text="Save a session first." if self._draft_session_id is None else "",
+                ),
+                ActionButtonModel("Stop Acquisition", "/operate/hf2/stop", tone="secondary", disabled=not capture_active),
+            ),
+            status_items=(
+                StatusItemModel("Connection", "Connected" if connected else "Disconnected", tone="good" if connected else "bad", detail=status.status_summary),
+                StatusItemModel("Acquisition", "Active" if capture_active else "Idle", tone="good" if capture_active else "neutral"),
+                StatusItemModel("Session requirement", "Ready" if self._draft_session_id else "Save session first", tone="info" if self._draft_session_id else "warn"),
+            ),
+        )
+
+    def _build_run_panel(self, preflight: PreflightReport, latest_state: RunState | None) -> OperatePanelModel:
+        issue_detail = self._preflight_issue_summary(preflight)
+        run_label = latest_state.phase.value if latest_state is not None else "not started"
+        run_tone = _phase_tone(latest_state.phase) if latest_state is not None else ("good" if preflight.ready_to_start else "warn")
+        run_state: PageStateModel | None = None
+        if latest_state is not None and latest_state.phase == RunPhase.FAULTED and latest_state.latest_fault is not None:
+            run_state = fault_state("Run faulted", latest_state.latest_fault.message)
+        elif not preflight.ready_to_start:
+            run_state = blocked_state("Run blocked", "Preflight must pass before the run can start.", details=issue_detail)
+        return OperatePanelModel(
+            title="Run Control",
+            subtitle="Preflight, start, and abort remain explicit so the user can see whether the system is ready now.",
+            actions=(
+                ActionButtonModel("Run Preflight", "/operate/run/preflight"),
+                ActionButtonModel("Start Run", "/operate/run/start", disabled=not preflight.ready_to_start),
+                ActionButtonModel("Abort Run", "/operate/run/abort", tone="danger", disabled=latest_state is None or latest_state.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED}),
+            ),
+            status_items=(
+                StatusItemModel("Ready", "Yes" if preflight.ready_to_start else "No", tone="good" if preflight.ready_to_start else "bad"),
+                StatusItemModel("Run state", run_label.replace("_", " ").title(), tone=run_tone),
+                StatusItemModel("Errors / warnings", "Clear" if not issue_detail else f"{len(issue_detail)} item(s)", tone="warn" if issue_detail else "good", detail=issue_detail[0] if issue_detail else "No blocking or warning issues."),
+            ),
+            state=run_state,
+            notes=("Start Run reuses the current planned session when one exists; otherwise it creates one first.",),
+        )
+
+    async def _live_status_items(self, preflight: PreflightReport) -> tuple[StatusItemModel, ...]:
+        laser = await self._scenario.bundle.mircat.get_status()
+        hf2 = await self._scenario.bundle.hf2li.get_status()
+        timing_issue = next((check for check in preflight.checks if check.target in {"t660-2-master", "t660-1-slave"} and check.state.value != "pass"), None)
+        scan_active = _bool_vendor_status(laser, "scan_active")
+        tuned = laser.vendor_status.get("tuned_target_cm1")
+        return (
+            StatusItemModel("Laser connected", "Yes" if laser.connected else "No", tone="good" if laser.connected else "bad"),
+            StatusItemModel("Armed", "Yes" if _bool_vendor_status(laser, "armed") else "No", tone="good" if _bool_vendor_status(laser, "armed") else "neutral"),
+            StatusItemModel("Emission", "On" if _bool_vendor_status(laser, "emission_enabled") else "Off", tone="good" if _bool_vendor_status(laser, "emission_enabled") else "neutral"),
+            StatusItemModel(
+                "Tuned / scan state",
+                "Scan active" if scan_active else ("Tuned" if tuned is not None else "Idle"),
+                tone="info" if scan_active or tuned is not None else "neutral",
+                detail=f"Target {tuned:.2f} cm^-1" if isinstance(tuned, (float, int)) else laser.status_summary,
+            ),
+            StatusItemModel("HF2LI connected", "Yes" if hf2.connected else "No", tone="good" if hf2.connected else "bad"),
+            StatusItemModel(
+                "Timing readiness",
+                "Ready" if timing_issue is None else "Attention",
+                tone="good" if timing_issue is None else "warn",
+                detail="Master and slave timing are ready." if timing_issue is None else timing_issue.summary,
+            ),
+        )
+
+    async def _recent_activity_items(self) -> tuple[EventLogItem, ...]:
+        activity = list(self._recent_activity)
+        if self._active_run_id is not None:
+            activity.extend(await self.get_run_events(self._active_run_id))
+        elif self._selected_session_id is not None:
+            detail = await self._session_catalog.get_session_detail(self._selected_session_id)
+            activity.extend(
+                EventLogItem(
+                    timestamp=event.emitted_at,
+                    source=event.source,
+                    message=event.message,
+                    tone=_event_tone(event.event_type),
+                )
+                for event in detail.event_timeline[-4:]
+            )
+        activity.sort(key=lambda item: item.timestamp, reverse=True)
+        return tuple(activity[:8])
+
+    def _operate_page_state(self, preflight: PreflightReport, latest_state: RunState | None) -> PageStateModel | None:
+        if latest_state is not None and latest_state.phase == RunPhase.FAULTED and latest_state.latest_fault is not None:
+            return fault_state(
+                "System attention required",
+                "The last run faulted on the canonical path.",
+                details=(latest_state.latest_fault.message,),
+            )
+        return self._preflight_page_state(
+            preflight,
+            title="System not ready",
+            warning_title="System ready with warnings",
+        )
+
+    def _preflight_page_state(self, preflight: PreflightReport, *, title: str, warning_title: str) -> PageStateModel | None:
+        blocking_messages = tuple(
+            issue.message
+            for check in preflight.checks
+            for issue in check.issues
+            if issue.blocking
+        )
+        warning_messages = tuple(
+            issue.message
+            for check in preflight.checks
+            for issue in check.issues
+            if not issue.blocking
+        )
+        if blocking_messages:
+            return blocked_state(title, "One or more required checks are blocking the supported-v1 workflow.", details=blocking_messages)
+        if warning_messages:
+            return warning_state(warning_title, "The main path can proceed, but optional capability or review detail is degraded.", details=warning_messages)
+        return None
+
+    def _preflight_issue_summary(self, preflight: PreflightReport) -> tuple[str, ...]:
+        return tuple(
+            issue.message
+            for check in preflight.checks
+            for issue in check.issues
+        )
+
+    def _current_hf2_acquisition(self) -> HF2PrimaryAcquisition:
+        return HF2PrimaryAcquisition(
+            profile_name=self._scenario.recipe.hf2_primary_acquisition.profile_name,
+            stream_selections=(
+                HF2StreamSelection(
+                    demod_index=self._draft.hf2_demod_index,
+                    component=self._draft.hf2_component,
+                ),
+            ),
+            demodulators=(
+                HF2DemodulatorConfiguration(
+                    demod_index=self._draft.hf2_demod_index,
+                    sample_rate_hz=self._draft.hf2_sample_rate_hz,
+                    harmonic=self._draft.hf2_harmonic,
+                ),
+            ),
+            capture_interval_seconds=self._draft.hf2_capture_interval_seconds,
+            preferred_device_id=self._scenario.recipe.hf2_primary_acquisition.preferred_device_id,
+        )
+
+    def _current_recipe(self):
+        return replace(
+            self._scenario.recipe,
+            session_label=self._draft.session_label or None,
+            hf2_primary_acquisition=self._current_hf2_acquisition(),
+        )
+
+    def _current_session_notes(self) -> tuple[str, ...]:
+        return (
+            f"sample_id:{self._draft.sample_id}",
+            f"operator_notes:{self._draft.operator_notes}",
+            f"runtime_mode:simulator:{self._scenario.scenario_id}",
+            f"runtime_description:{self._scenario.description}",
+        )
+
+    def _load_draft_from_manifest(self, manifest: SessionManifest) -> None:
+        self._draft.session_label = manifest.recipe_snapshot.session_label or self._draft.session_label
+        self._draft.sample_id = _note_value(manifest.notes, "sample_id") or self._draft.sample_id
+        self._draft.operator_notes = _note_value(manifest.notes, "operator_notes") or self._draft.operator_notes
+        acquisition = manifest.recipe_snapshot.hf2_primary_acquisition
+        self._draft.hf2_capture_interval_seconds = acquisition.capture_interval_seconds
+        self._draft.hf2_demod_index = acquisition.demodulators[0].demod_index
+        self._draft.hf2_component = acquisition.stream_selections[0].component
+        self._draft.hf2_sample_rate_hz = acquisition.demodulators[0].sample_rate_hz
+        self._draft.hf2_harmonic = acquisition.demodulators[0].harmonic
+
+    def _current_session_status_label(self, sessions) -> str:
+        current_session_id = self._draft_session_id or self._selected_session_id
+        if current_session_id is None:
+            return "not selected"
+        session = next((entry for entry in sessions if entry.session_id == current_session_id), None)
+        return session.status.value if session is not None else "active in memory"
+
+    def _remember_activity(self, source: str, message: str, *, tone: str) -> None:
+        self._recent_activity.insert(
+            0,
+            EventLogItem(
+                timestamp=_utc_now(),
+                source=source,
+                message=message,
+                tone=tone,
+            ),
+        )
+        del self._recent_activity[12:]
+
+    def _mark_preflight_dirty(self) -> None:
+        self._preflight_dirty = True
 
     def _setup_surface_title(self, surface: str) -> str:
         return {
@@ -535,35 +1083,25 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
 
     def _surface_badges(self, surface: str) -> tuple[StatusBadge, ...]:
         badge_map = {
-            "setup": (
-                StatusBadge(label="Real preflight", tone="good"),
-                StatusBadge(label="Fixture-backed form values", tone="info"),
-                StatusBadge(label="Review-first", tone="neutral"),
+            "operate": (
+                StatusBadge(label="Operator-first", tone="good"),
+                StatusBadge(label="Simulator-backed controls", tone="info"),
+                StatusBadge(label="Default path", tone="neutral"),
             ),
             "advanced": (
                 StatusBadge(label="Expert only", tone="warn"),
                 StatusBadge(label="Same canonical path", tone="good"),
-                StatusBadge(label="Controls not yet writable", tone="info"),
-            ),
-            "calibrated": (
-                StatusBadge(label="Guarded defaults", tone="warn"),
-                StatusBadge(label="Bench-owned truth", tone="good"),
-                StatusBadge(label="Read-only in this pass", tone="info"),
-            ),
-            "run": (
-                StatusBadge(label="Authoritative run state", tone="good"),
-                StatusBadge(label="HF2 raw authority", tone="good"),
-                StatusBadge(label="Pico secondary only", tone="info"),
+                StatusBadge(label="Progressive disclosure", tone="info"),
             ),
             "results": (
                 StatusBadge(label="Persisted sessions", tone="good"),
-                StatusBadge(label="Replay aware", tone="good"),
-                StatusBadge(label="Artifact visibility", tone="info"),
+                StatusBadge(label="Raw artifact visibility", tone="good"),
+                StatusBadge(label="Human-readable provenance", tone="info"),
             ),
             "analyze": (
                 StatusBadge(label="Persisted inputs only", tone="good"),
-                StatusBadge(label="Processing scaffold", tone="warn"),
-                StatusBadge(label="Placeholder actions labeled", tone="info"),
+                StatusBadge(label="Secondary surface", tone="warn"),
+                StatusBadge(label="Future wiring explicit", tone="info"),
             ),
             "service": (
                 StatusBadge(label="Expert surface", tone="warn"),
@@ -1356,60 +1894,8 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
             return "warn"
         return "neutral"
 
-    async def run_preflight(self) -> PreflightReport:
-        self._last_preflight = await self._preflight_validator.validate(
-            self._scenario.recipe,
-            self._scenario.preset,
-            SupportedV1DriverBundle(
-                mircat=self._scenario.bundle.mircat,
-                hf2li=self._scenario.bundle.hf2li,
-                t660_master=self._scenario.bundle.t660_master,
-                t660_slave=self._scenario.bundle.t660_slave,
-                mux=self._scenario.bundle.mux,
-                picoscope=self._scenario.bundle.picoscope,
-            ),
-        )
-        return self._last_preflight
-
-    async def start_run(self) -> RunState:
-        preflight = await self._ensure_preflight()
-        if not preflight.ready_to_start:
-            raise ValueError("Preflight is blocked.")
-        manifest = await self._coordinator.create_session(
-            self._scenario.recipe,
-            self._scenario.preset,
-            notes=(
-                f"runtime_mode:simulator:{self._scenario.scenario_id}",
-                f"runtime_description:{self._scenario.description}",
-            ),
-        )
-        self._selected_session_id = manifest.session_id
-        run_state = await self._coordinator.start_run(
-            self._scenario.recipe,
-            self._scenario.preset,
-            manifest.session_id,
-        )
-        self._active_run_id = run_state.run_id
-        return run_state
-
-    async def abort_active_run(self) -> RunState | None:
-        if self._active_run_id is None:
-            return None
-        current = await self._coordinator.get_run_state(self._active_run_id)
-        if current.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED}:
-            return None
-        return await self._coordinator.abort_run(self._active_run_id, RunFailureReason.OPERATOR_ABORT)
-
     async def reopen_session(self, session_id: str) -> SessionManifest:
-        result = await self._session_replayer.open_session(
-            SessionOpenRequest(
-                session_id=session_id,
-                requested_at=_utc_now(),
-                reopen_for_replay=True,
-            )
-        )
-        self._selected_session_id = result.manifest.session_id
-        return result.manifest
+        return await self.open_saved_session(session_id)
 
     async def get_known_run_id(self) -> str | None:
         return self._active_run_id
@@ -1676,7 +2162,7 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
         return " | ".join(source_bits)
 
     async def _ensure_preflight(self) -> PreflightReport:
-        if self._last_preflight is None:
+        if self._last_preflight is None or self._preflight_dirty:
             self._last_preflight = await self.run_preflight()
         return self._last_preflight
 
@@ -1685,6 +2171,34 @@ class Phase3BSimulatorRuntime(UiRuntimeGateway):
             return "Not started"
         state = await self._coordinator.get_run_state(self._active_run_id)
         return state.phase.value.title()
+
+    async def _latest_run_state(self) -> RunState | None:
+        if self._active_run_id is None:
+            return None
+        return await self._coordinator.get_run_state(self._active_run_id)
+
+
+def _default_tune_target(scenario: Phase3BScenarioContext) -> float:
+    mircat = scenario.recipe.mircat
+    if mircat.single_wavelength_cm1 is not None:
+        return mircat.single_wavelength_cm1
+    if mircat.sweep_scan is not None:
+        return (mircat.sweep_scan.start_wavenumber_cm1 + mircat.sweep_scan.end_wavenumber_cm1) / 2.0
+    if mircat.multispectral_scan is not None:
+        return mircat.multispectral_scan.elements[0].target_wavenumber_cm1
+    return 1750.0
+
+
+def _note_value(notes: tuple[str, ...], prefix: str) -> str | None:
+    target = f"{prefix}:"
+    for note in notes:
+        if note.startswith(target):
+            return note[len(target):]
+    return None
+
+
+def _bool_vendor_status(status, key: str) -> bool:
+    return bool(status.vendor_status.get(key, False))
 
 
 def _event_tone(event_type: RunEventType) -> str:
@@ -1735,11 +2249,18 @@ def create_phase3b_runtime_map(storage_root: Path | None = None) -> dict[str, Ph
     )
     runtimes: dict[str, Phase3BSimulatorRuntime] = {}
     for context in contexts:
-        session_store = FilesystemSessionStore(
-            root=base_root,
-            initial_manifests=context.initial_manifests,
-            initial_raw_artifact_payloads=context.initial_raw_artifact_payloads,
-        )
+        try:
+            session_store = FilesystemSessionStore(
+                root=base_root,
+                initial_manifests=context.initial_manifests,
+                initial_raw_artifact_payloads=context.initial_raw_artifact_payloads,
+            )
+        except (ModuleNotFoundError, AttributeError):
+            # Local review should still work when Parquet dependencies are unavailable.
+            session_store = InMemorySessionStore(
+                initial_manifests=context.initial_manifests,
+                initial_raw_artifact_payloads=context.initial_raw_artifact_payloads,
+            )
         coordinator = InMemoryRunCoordinator(
             drivers=SupportedV1DriverBundle(
                 mircat=context.bundle.mircat,

@@ -1,51 +1,12 @@
-"""UI-facing typed query, command, and subscription surfaces."""
+"""UI-facing typed query and command surfaces."""
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from ircp_contracts import ExperimentPreset, ExperimentRecipe, PreflightReport, RunState, SessionManifest
+from ircp_contracts import HF2SampleComponent, SessionManifest
 
-from .models import (
-    AnalyzePageModel,
-    EventLogItem,
-    HeaderStatus,
-    LiveDataSeries,
-    ResultsPageModel,
-    RunPageModel,
-    RunStepSummary,
-    ServicePageModel,
-    SetupPageModel,
-)
-
-
-@runtime_checkable
-class ControlPlaneClient(Protocol):
-    async def run_preflight(
-        self,
-        recipe: ExperimentRecipe,
-        preset: ExperimentPreset | None = None,
-    ) -> PreflightReport:
-        """Request the authoritative preflight evaluation from the engine boundary."""
-
-    async def start_run(
-        self,
-        recipe: ExperimentRecipe,
-        preset: ExperimentPreset | None = None,
-    ) -> RunState:
-        """Request the canonical run-start path from the engine boundary."""
-
-    async def abort_run(self, run_id: str) -> RunState:
-        """Request explicit abort through the engine boundary."""
-
-    async def get_run_state(self, run_id: str) -> RunState:
-        """Read the current run state without orchestrating devices locally."""
-
-
-@runtime_checkable
-class ResultsQueryService(Protocol):
-    async def open_session(self, session_id: str) -> SessionManifest:
-        """Open a saved session for results, replay, or comparison views."""
+from .models import AnalyzePageModel, AdvancedPageModel, HeaderStatus, OperatePageModel, ResultsPageModel, ServicePageModel
 
 
 @runtime_checkable
@@ -53,55 +14,84 @@ class UiQueryService(Protocol):
     async def get_header_status(self, active_route: str) -> HeaderStatus:
         """Return the shell header, route navigation, and global status badges."""
 
-    async def get_setup_page(self, surface: str = "setup") -> SetupPageModel:
-        """Return the Setup, Advanced, or Calibrated scaffold model."""
-
-    async def get_run_page(self) -> RunPageModel:
-        """Return the Run scaffold model."""
+    async def get_operate_page(self) -> OperatePageModel:
+        """Return the default operator-first page model."""
 
     async def get_results_page(self, selected_session_id: str | None = None) -> ResultsPageModel:
-        """Return the Results scaffold model."""
+        """Return the saved-session review page model."""
+
+    async def get_advanced_page(self) -> AdvancedPageModel:
+        """Return the expert-only advanced page model."""
 
     async def get_analyze_page(self, selected_session_id: str | None = None) -> AnalyzePageModel:
-        """Return the Analyze scaffold model."""
+        """Return the secondary analyze page model."""
 
     async def get_service_page(self) -> ServicePageModel:
-        """Return the Service scaffold model."""
+        """Return the service and maintenance page model."""
 
 
 @runtime_checkable
 class UiCommandService(Protocol):
-    async def run_preflight(self) -> PreflightReport:
-        """Trigger the canonical preflight path."""
+    async def save_session(self, session_label: str, sample_id: str, operator_notes: str) -> SessionManifest:
+        """Persist a planned session using the current draft recipe."""
 
-    async def start_run(self) -> RunState:
-        """Create a session and execute the canonical run path."""
-
-    async def abort_active_run(self) -> RunState | None:
-        """Abort the current run when a run is still active."""
-
-    async def reopen_session(self, session_id: str) -> SessionManifest:
+    async def open_saved_session(self, session_id: str) -> SessionManifest:
         """Reopen a saved session through the defined session boundary."""
 
+    async def connect_laser(self):
+        """Connect the MIRcat device."""
 
-@runtime_checkable
-class UiSubscriptionService(Protocol):
-    async def get_known_run_id(self) -> str | None:
-        """Return the current run id, if one exists."""
+    async def disconnect_laser(self):
+        """Disconnect the MIRcat device."""
 
-    async def get_run_events(self, run_id: str) -> tuple[EventLogItem, ...]:
-        """Return the current event log projection for one run."""
+    async def arm_laser(self):
+        """Arm the MIRcat for coordinated control."""
 
-    async def get_live_data(
+    async def disarm_laser(self):
+        """Disarm the MIRcat."""
+
+    async def set_laser_emission(self, enabled: bool):
+        """Set the MIRcat emission state explicitly."""
+
+    async def tune_laser(self, target_wavenumber_cm1: float):
+        """Apply a single-wavelength tune target for operator review."""
+
+    async def start_scan(self):
+        """Start the current MIRcat scan recipe."""
+
+    async def stop_scan(self):
+        """Stop the active MIRcat scan recipe."""
+
+    async def connect_hf2(self):
+        """Connect the HF2LI device."""
+
+    async def disconnect_hf2(self):
+        """Disconnect the HF2LI device."""
+
+    async def start_hf2_acquisition(
         self,
-        run_id: str,
-    ) -> tuple[tuple[LiveDataSeries, ...], tuple[LiveDataSeries, ...]]:
-        """Return primary and secondary live-data projections for one run."""
+        *,
+        demod_index: int,
+        component: HF2SampleComponent,
+        sample_rate_hz: float,
+        harmonic: int,
+        capture_interval_seconds: float,
+    ):
+        """Apply the current HF2 draft and start acquisition when a session exists."""
 
-    async def get_run_steps(self, run_id: str) -> tuple[RunStepSummary, ...]:
-        """Return the explicit run-state progression for one run."""
+    async def stop_hf2_acquisition(self):
+        """Stop the active HF2 acquisition."""
+
+    async def run_preflight(self):
+        """Trigger the canonical preflight path."""
+
+    async def start_run(self):
+        """Create or reuse the current planned session and run the canonical path."""
+
+    async def abort_active_run(self):
+        """Abort the current run when a run is still active."""
 
 
 @runtime_checkable
-class UiRuntimeGateway(UiQueryService, UiCommandService, UiSubscriptionService, Protocol):
-    """Combined UI runtime surface for the Phase 3B shell."""
+class UiRuntimeGateway(UiQueryService, UiCommandService, Protocol):
+    """Combined UI runtime surface for the operator-first simulator shell."""

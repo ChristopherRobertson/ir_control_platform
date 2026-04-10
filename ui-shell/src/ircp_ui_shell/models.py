@@ -1,11 +1,9 @@
-"""Typed UI models for the server-rendered workflow shell."""
+"""Typed UI models for the operator-first server-rendered shell."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-
-from ircp_contracts import PreflightReport
 
 from .page_state import PageStateModel
 
@@ -42,19 +40,6 @@ class HeaderStatus:
 
 
 @dataclass(frozen=True)
-class SectionHeader:
-    title: str
-    subtitle: str
-
-
-@dataclass(frozen=True)
-class SummaryPanel:
-    title: str
-    subtitle: str
-    items: tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class CalloutModel:
     title: str
     body: str
@@ -71,22 +56,22 @@ class FormOptionModel:
 
 @dataclass(frozen=True)
 class FormFieldModel:
+    name: str
     label: str
     field_type: str
     value: str = ""
     help_text: str = ""
-    disabled: bool = True
+    disabled: bool = False
     placeholder: str = ""
     options: tuple[FormOptionModel, ...] = ()
     checked: bool = False
 
 
 @dataclass(frozen=True)
-class FormSectionModel:
+class SummaryPanel:
     title: str
     subtitle: str
-    fields: tuple[FormFieldModel, ...]
-    notes: tuple[str, ...] = ()
+    items: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -108,35 +93,11 @@ class DeviceSummaryCard:
 
 
 @dataclass(frozen=True)
-class ReadinessRow:
-    label: str
-    state: str
-    summary: str
-    details: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class EventLogItem:
     timestamp: datetime
     source: str
     message: str
     tone: str
-
-
-@dataclass(frozen=True)
-class LiveDataPointModel:
-    axis_value: float
-    value: float
-
-
-@dataclass(frozen=True)
-class LiveDataSeries:
-    label: str
-    units: str
-    axis_label: str
-    axis_units: str
-    role_label: str
-    points: tuple[LiveDataPointModel, ...]
 
 
 @dataclass(frozen=True)
@@ -157,50 +118,67 @@ class SessionSummaryCard:
 
 
 @dataclass(frozen=True)
-class RunStepSummary:
-    phase_label: str
-    active_step: str
-    progress_fraction: float
-    summary: str
-    tone: str
+class StatusItemModel:
+    label: str
+    value: str
+    tone: str = "neutral"
+    detail: str = ""
 
 
 @dataclass(frozen=True)
-class SetupPageModel:
+class ActionButtonModel:
+    label: str
+    action: str
+    tone: str = "primary"
+    disabled: bool = False
+    helper_text: str = ""
+    hidden_fields: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class OperatePanelModel:
+    title: str
+    subtitle: str
+    fields: tuple[FormFieldModel, ...] = ()
+    actions: tuple[ActionButtonModel, ...] = ()
+    status_items: tuple[StatusItemModel, ...] = ()
+    notes: tuple[str, ...] = ()
+    state: PageStateModel | None = None
+
+
+@dataclass(frozen=True)
+class OperatePageModel:
     title: str
     subtitle: str
     state: PageStateModel | None
-    surface_navigation: tuple[NavigationItem, ...]
     surface_badges: tuple[StatusBadge, ...]
-    recipe_title: str
-    preset_name: str
-    section_header: SectionHeader
-    summary_panels: tuple[SummaryPanel, ...]
-    form_sections: tuple[FormSectionModel, ...]
-    device_cards: tuple[DeviceSummaryCard, ...]
-    readiness_rows: tuple[ReadinessRow, ...]
+    session_panel: OperatePanelModel
+    laser_panel: OperatePanelModel
+    acquisition_panel: OperatePanelModel
+    run_panel: OperatePanelModel
+    live_status: tuple[StatusItemModel, ...]
+    recent_activity: tuple[EventLogItem, ...]
     callouts: tuple[CalloutModel, ...] = ()
-    tables: tuple[TableModel, ...] = ()
-    preflight_report: PreflightReport | None = None
 
 
 @dataclass(frozen=True)
-class RunPageModel:
+class AdvancedSectionModel:
+    title: str
+    subtitle: str
+    summary_panels: tuple[SummaryPanel, ...] = ()
+    tables: tuple[TableModel, ...] = ()
+    notes: tuple[str, ...] = ()
+    open_by_default: bool = False
+
+
+@dataclass(frozen=True)
+class AdvancedPageModel:
     title: str
     subtitle: str
     state: PageStateModel | None
     surface_badges: tuple[StatusBadge, ...]
-    section_header: SectionHeader
-    run_id: str | None
-    run_phase_label: str
-    session_id: str | None
-    summary_panels: tuple[SummaryPanel, ...]
-    callouts: tuple[CalloutModel, ...]
-    tables: tuple[TableModel, ...]
-    event_log: tuple[EventLogItem, ...]
-    primary_live_data: tuple[LiveDataSeries, ...]
-    secondary_live_data: tuple[LiveDataSeries, ...]
-    run_steps: tuple[RunStepSummary, ...]
+    sections: tuple[AdvancedSectionModel, ...]
+    callouts: tuple[CalloutModel, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -209,13 +187,12 @@ class ResultsPageModel:
     subtitle: str
     state: PageStateModel | None
     surface_badges: tuple[StatusBadge, ...]
-    section_header: SectionHeader
     sessions: tuple[SessionSummaryCard, ...]
     selected_session: SessionSummaryCard | None
     detail_panels: tuple[SummaryPanel, ...]
     artifact_panels: tuple[SummaryPanel, ...] = ()
+    storage_panels: tuple[SummaryPanel, ...] = ()
     callouts: tuple[CalloutModel, ...] = ()
-    tables: tuple[TableModel, ...] = ()
     event_log: tuple[EventLogItem, ...] = ()
 
 
@@ -225,13 +202,11 @@ class AnalyzePageModel:
     subtitle: str
     state: PageStateModel | None
     surface_badges: tuple[StatusBadge, ...]
-    section_header: SectionHeader
     sessions: tuple[SessionSummaryCard, ...]
     selected_session: SessionSummaryCard | None
     summary_panels: tuple[SummaryPanel, ...]
-    form_sections: tuple[FormSectionModel, ...]
-    callouts: tuple[CalloutModel, ...] = ()
     tables: tuple[TableModel, ...] = ()
+    callouts: tuple[CalloutModel, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -240,10 +215,7 @@ class ServicePageModel:
     subtitle: str
     state: PageStateModel | None
     surface_badges: tuple[StatusBadge, ...]
-    section_header: SectionHeader
     device_cards: tuple[DeviceSummaryCard, ...]
-    notes: tuple[str, ...]
     diagnostic_panels: tuple[SummaryPanel, ...] = ()
-    form_sections: tuple[FormSectionModel, ...] = ()
     callouts: tuple[CalloutModel, ...] = ()
     tables: tuple[TableModel, ...] = ()

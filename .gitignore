@@ -1,1 +1,7 @@
 .local_state/
+ircpenv/*
+ircpenv/Lib/*
+ircpenv/Lib
+ircpenv/Scripts/*
+ircpenv/Scripts
+

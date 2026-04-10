@@ -9,6 +9,7 @@ from enum import Enum
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import types
 from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
@@ -126,6 +127,19 @@ def _require_pyarrow():
         import pyarrow as pa
         import pyarrow.parquet as pq
     except ModuleNotFoundError as exc:
+        repo_root = Path(__file__).resolve().parents[3]
+        for site_packages in (
+            repo_root / "ircpenv" / "Lib" / "site-packages",
+            repo_root / "ircpenv" / "lib" / "site-packages",
+        ):
+            if site_packages.is_dir() and str(site_packages) not in sys.path:
+                sys.path.insert(0, str(site_packages))
+                try:
+                    import pyarrow as pa
+                    import pyarrow.parquet as pq
+                except ModuleNotFoundError:
+                    continue
+                return pa, pq
         raise ModuleNotFoundError(
             "pyarrow is required for Parquet-backed raw artifact persistence."
         ) from exc

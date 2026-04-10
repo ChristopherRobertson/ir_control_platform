@@ -1,28 +1,27 @@
-"""Server-rendered UI primitives for the workflow-first shell."""
+"""Server-rendered UI primitives for the operator-first shell."""
 
 from __future__ import annotations
 
 from html import escape
 
-from ircp_contracts import PreflightReport
-
 from .models import (
+    ActionButtonModel,
+    AdvancedPageModel,
+    AdvancedSectionModel,
     AnalyzePageModel,
     CalloutModel,
     DeviceSummaryCard,
     EventLogItem,
     FormFieldModel,
-    FormSectionModel,
     HeaderStatus,
-    LiveDataSeries,
     NavigationItem,
+    OperatePageModel,
+    OperatePanelModel,
     ResultsPageModel,
-    RunPageModel,
-    RunStepSummary,
     ServicePageModel,
     SessionSummaryCard,
-    SetupPageModel,
     StatusBadge,
+    StatusItemModel,
     SummaryPanel,
     TableModel,
 )
@@ -32,15 +31,18 @@ from .page_state import PageStateModel
 APP_CSS = """
 :root {
   --bg-top: #f4efe3;
-  --bg-bottom: #e7ece8;
-  --surface: rgba(255, 255, 255, 0.9);
-  --surface-strong: rgba(255, 255, 255, 0.96);
+  --bg-bottom: #e6ede8;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: rgba(255, 255, 255, 0.97);
   --border: #d6d0c1;
-  --ink: #1d2328;
+  --ink: #172129;
   --muted: #55606d;
   --accent: #0f766e;
   --accent-strong: #115e59;
-  --secondary: #8b5e34;
+  --accent-soft: rgba(15, 118, 110, 0.1);
+  --secondary: #475569;
+  --ghost: #b45309;
+  --danger: #b91c1c;
   --good-bg: #ddf4e6;
   --good-border: #6a9f7a;
   --warn-bg: #fff4d6;
@@ -49,7 +51,7 @@ APP_CSS = """
   --bad-border: #d66855;
   --info-bg: #e5f0f6;
   --info-border: #6f93ac;
-  --shadow: 0 12px 30px rgba(24, 37, 51, 0.08);
+  --shadow: 0 14px 36px rgba(24, 37, 51, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -58,7 +60,7 @@ body {
   margin: 0;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 32%),
+    radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 34%),
     radial-gradient(circle at top right, rgba(139, 94, 52, 0.12), transparent 28%),
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
   color: var(--ink);
@@ -75,19 +77,19 @@ main {
 
 .shell-header {
   background:
-    linear-gradient(135deg, rgba(20, 34, 46, 0.98) 0%, rgba(16, 74, 82, 0.94) 58%, rgba(90, 61, 42, 0.94) 100%);
+    linear-gradient(135deg, rgba(20, 34, 46, 0.98) 0%, rgba(16, 74, 82, 0.94) 60%, rgba(90, 61, 42, 0.94) 100%);
   color: #f8fbfc;
   padding: 28px 24px 30px;
   box-shadow: var(--shadow);
 }
 
 .shell-header h1 {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   font-size: 2rem;
   letter-spacing: -0.03em;
 }
 
-.nav-row, .scenario-row, .badge-row, .surface-nav, .surface-badges, .panel-actions {
+.nav-row, .scenario-row, .badge-row, .surface-badges, .action-row, .toolbar-row {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
@@ -95,7 +97,7 @@ main {
 
 .scenario-row, .nav-row, .badge-row { margin-top: 12px; }
 
-.nav-link, .scenario-chip, .badge-pill, .surface-link, .button-link {
+.nav-link, .scenario-chip, .badge-pill, .button-link {
   border-radius: 999px;
   padding: 8px 14px;
   border: 1px solid rgba(255, 255, 255, 0.22);
@@ -120,30 +122,35 @@ main {
 .badge-pill.bad { border-color: #eb8d84; }
 .badge-pill.info, .badge-pill.neutral { border-color: #9bb8c6; }
 
-.page-topbar {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.surface-link {
-  color: var(--ink);
-  border-color: var(--border);
-  background: rgba(255, 255, 255, 0.55);
-}
-
-.surface-link.active {
-  background: rgba(15, 118, 110, 0.12);
-  border-color: rgba(15, 118, 110, 0.4);
-  color: var(--accent-strong);
-}
-
 .page-stack {
   display: grid;
   gap: 18px;
 }
 
-.section-grid {
+.hero {
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  padding: 22px;
+  box-shadow: var(--shadow);
+}
+
+.hero h2, .panel h3, .panel h4 {
+  margin-top: 0;
+}
+
+.panel-subtitle, .hero-subtitle {
+  color: var(--muted);
+  margin-top: -4px;
+  margin-bottom: 14px;
+}
+
+.small {
+  color: #66717c;
+  font-size: 0.92rem;
+}
+
+.panel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
@@ -157,20 +164,9 @@ main {
   box-shadow: var(--shadow);
 }
 
-.panel.hero {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.97) 0%, rgba(245, 248, 247, 0.95) 100%);
+.panel.state-accent {
+  border-color: rgba(15, 118, 110, 0.24);
 }
-
-.panel h2, .panel h3, .panel h4 { margin-top: 0; }
-
-.panel-subtitle {
-  color: var(--muted);
-  margin-top: -6px;
-  margin-bottom: 14px;
-}
-
-.small { color: #66717c; font-size: 0.92rem; }
 
 .state-box, .callout {
   border-radius: 14px;
@@ -183,7 +179,7 @@ main {
 .state-box.warning { background: var(--warn-bg); border-color: var(--warn-border); }
 .state-box.fault, .callout.bad { background: var(--bad-bg); border-color: var(--bad-border); }
 .state-box.empty, .callout.neutral { background: #f5f4ef; }
-.state-box.unavailable, .state-box.recovery, .callout.info, .callout.good {
+.state-box.unavailable, .state-box.recovery, .callout.info {
   background: var(--info-bg);
   border-color: var(--info-border);
 }
@@ -194,18 +190,64 @@ main {
   gap: 12px;
 }
 
-.summary-row, .device-card, .session-card, .timeline-step, .readiness-row, .event-row, .table-note {
+.toolbar-row {
+  margin-top: 12px;
+}
+
+.action-row {
+  align-items: center;
+}
+
+.button-note {
+  display: block;
+  color: var(--muted);
+  font-size: 0.86rem;
+  margin-top: 6px;
+}
+
+form { margin: 0; }
+
+button, .button-link {
+  background: var(--accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font: inherit;
+  text-decoration: none;
+}
+
+button.secondary, .button-link.secondary { background: var(--secondary); }
+button.ghost, .button-link.ghost { background: var(--ghost); }
+button.danger, .button-link.danger { background: var(--danger); }
+
+button:disabled, .button-link.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.field-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.status-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.status-item, .device-card, .session-card, .summary-row, .event-row {
   padding: 10px 0;
   border-top: 1px solid #ebe7db;
 }
 
-.summary-row:first-child,
+.status-item:first-child,
 .device-card:first-child,
 .session-card:first-child,
-.timeline-step:first-child,
-.readiness-row:first-child,
-.event-row:first-child,
-.table-note:first-child {
+.summary-row:first-child,
+.event-row:first-child {
   border-top: none;
   padding-top: 0;
 }
@@ -221,40 +263,8 @@ main {
 .status-label.good { background: #d9f2dd; }
 .status-label.warn { background: #fff4d8; }
 .status-label.bad { background: #ffe2e2; }
+.status-label.info { background: #e2eef8; }
 .status-label.neutral { background: #edf2f7; }
-
-form { margin: 0; }
-
-button, .button-link {
-  background: var(--accent);
-  color: white;
-  border: none;
-  cursor: pointer;
-  padding: 10px 14px;
-  border-radius: 12px;
-  font: inherit;
-  text-decoration: none;
-}
-
-button.secondary, .button-link.secondary {
-  background: #475569;
-}
-
-button.ghost, .button-link.ghost {
-  background: #b45309;
-}
-
-button:disabled, .button-link.disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-}
 
 .field {
   display: grid;
@@ -278,14 +288,9 @@ button:disabled, .button-link.disabled {
   background: rgba(255, 255, 255, 0.92);
 }
 
-.field textarea { min-height: 88px; resize: vertical; }
-
-.field input:disabled,
-.field select:disabled,
-.field textarea:disabled {
-  color: var(--ink);
-  opacity: 1;
-  background: rgba(245, 248, 247, 0.9);
+.field textarea {
+  min-height: 88px;
+  resize: vertical;
 }
 
 .field-help {
@@ -293,14 +298,18 @@ button:disabled, .button-link.disabled {
   font-size: 0.88rem;
 }
 
-.field.checkbox-field {
-  grid-template-columns: auto 1fr;
-  align-items: start;
-  gap: 10px;
+.notes-list, .detail-list {
+  margin: 8px 0 0 18px;
+  padding: 0;
 }
 
-.field.checkbox-field label {
-  margin-top: 2px;
+.detail-list li, .notes-list li {
+  margin-top: 6px;
+}
+
+.placeholder-copy {
+  color: #6c6f74;
+  font-style: italic;
 }
 
 .data-table {
@@ -321,26 +330,19 @@ button:disabled, .button-link.disabled {
   font-size: 0.9rem;
 }
 
-.notes-list, .detail-list { margin: 8px 0 0 18px; padding: 0; }
-
-.detail-list li, .notes-list li { margin-top: 6px; }
-
-.placeholder-copy {
-  color: #6c6f74;
-  font-style: italic;
-}
-
-details {
+.accordion {
   border-top: 1px dashed #d4d0c4;
-  margin-top: 12px;
   padding-top: 10px;
 }
 
-details summary {
+details > summary {
   cursor: pointer;
   font-weight: 600;
   color: #32414d;
+  list-style: none;
 }
+
+details > summary::-webkit-details-marker { display: none; }
 
 @media (max-width: 720px) {
   main { padding: 20px 16px 36px; }
@@ -370,7 +372,7 @@ def render_header(header: HeaderStatus) -> str:
     scenarios = "".join(
         (
             f'<a class="scenario-chip{" active" if option.active else ""}" '
-            f'href="/setup?scenario={escape(option.scenario_id)}">{escape(option.label)}</a>'
+            f'href="/operate?scenario={escape(option.scenario_id)}">{escape(option.label)}</a>'
         )
         for option in header.scenario_options
     )
@@ -394,32 +396,6 @@ def render_header(header: HeaderStatus) -> str:
 
 def render_badge(badge: StatusBadge) -> str:
     return f'<span class="badge-pill {escape(badge.tone)}">{escape(badge.label)}</span>'
-
-
-def render_page_topbar(
-    surface_navigation: tuple[NavigationItem, ...] = (),
-    surface_badges: tuple[StatusBadge, ...] = (),
-) -> str:
-    parts: list[str] = []
-    if surface_navigation:
-        parts.append(
-            '<div class="surface-nav">'
-            + "".join(
-                f'<a class="surface-link{" active" if item.active else ""}" href="{escape(item.href)}">'
-                f"{escape(item.label)}</a>"
-                for item in surface_navigation
-            )
-            + "</div>"
-        )
-    if surface_badges:
-        parts.append(
-            '<div class="surface-badges">'
-            + "".join(render_badge(badge) for badge in surface_badges)
-            + "</div>"
-        )
-    if not parts:
-        return ""
-    return '<div class="page-topbar">' + "".join(parts) + "</div>"
 
 
 def render_page_state(state: PageStateModel | None) -> str:
@@ -451,169 +427,202 @@ def render_callout(callout: CalloutModel) -> str:
     )
 
 
-def render_setup_page(page: SetupPageModel, scenario_id: str, surface: str) -> str:
-    summaries = "".join(render_summary_panel(panel) for panel in page.summary_panels)
-    forms = "".join(render_form_section(section) for section in page.form_sections)
-    cards = "".join(render_device_card(card) for card in page.device_cards)
-    readiness = "".join(render_readiness_row(row) for row in page.readiness_rows)
-    tables = "".join(render_table_section(table) for table in page.tables)
-    preflight = render_preflight_report(page.preflight_report)
+def render_operate_page(page: OperatePageModel, scenario_id: str) -> str:
+    live_status = "".join(render_status_item(item) for item in page.live_status)
+    activity = "".join(render_event_row(item) for item in page.recent_activity) or (
+        '<div class="placeholder-copy">No recent activity yet.</div>'
+    )
     return f"""
     <div class="page-stack">
-      {render_page_topbar(page.surface_navigation, page.surface_badges)}
-      <section class="panel hero">
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
-        <p class="panel-subtitle">{escape(page.subtitle)}</p>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
         {render_page_state(page.state)}
-        <div class="small">Recipe: {escape(page.recipe_title)} | Preset: {escape(page.preset_name)}</div>
-        <div class="panel-actions">
-          <form method="post" action="/setup/preflight">
-            <input type="hidden" name="scenario" value="{escape(scenario_id)}">
-            <input type="hidden" name="surface" value="{escape(surface)}">
-            <button type="submit">Run Preflight</button>
-          </form>
-          <a class="button-link secondary" href="/run?scenario={escape(scenario_id)}">Continue to Run</a>
-          <a class="button-link ghost" href="/results?scenario={escape(scenario_id)}">Inspect Results</a>
-        </div>
       </section>
       {render_callouts(page.callouts)}
-      <section class="section-grid">{summaries}</section>
-      <section class="section-grid">{forms}</section>
-      <section class="section-grid">
-        <div class="panel">
-          <h3>{escape(page.section_header.title)}</h3>
-          <p class="panel-subtitle">{escape(page.section_header.subtitle)}</p>
-          {cards or '<div class="placeholder-copy">No device cards for this surface.</div>'}
-        </div>
-        <div class="panel">
-          <h3>Readiness</h3>
-          <p class="panel-subtitle">Explicit pass, warning, and blocked states for the visible workflow.</p>
-          {readiness or '<div class="placeholder-copy">No readiness checks are shown on this surface.</div>'}
-        </div>
+      <section class="panel-grid">
+        {render_operate_panel(page.session_panel, scenario_id)}
+        {render_operate_panel(page.laser_panel, scenario_id)}
+        {render_operate_panel(page.acquisition_panel, scenario_id)}
+        {render_operate_panel(page.run_panel, scenario_id)}
       </section>
-      {tables}
-      <section class="panel">
-        <h3>Preflight Summary</h3>
-        <p class="panel-subtitle">Canonical preflight output from the engine boundary.</p>
-        {preflight}
+      <section class="panel-grid">
+        <div class="panel state-accent">
+          <h3>Live Status</h3>
+          <p class="panel-subtitle">What the system is doing right now, without the diagnostic overload.</p>
+          <div class="status-grid">{live_status}</div>
+        </div>
+        <div class="panel">
+          <h3>Recent Activity</h3>
+          <p class="panel-subtitle">Compact events, warnings, and action feedback for the current operator pass.</p>
+          {activity}
+        </div>
       </section>
     </div>"""
 
 
-def render_run_page(page: RunPageModel, scenario_id: str) -> str:
-    summaries = "".join(render_summary_panel(panel) for panel in page.summary_panels)
-    tables = "".join(render_table_section(table) for table in page.tables)
-    primary_live_data = "".join(render_live_data_series(series) for series in page.primary_live_data) or (
-        '<div class="placeholder-copy">No primary HF2 data has been produced for this scenario yet.</div>'
+def render_operate_panel(panel: OperatePanelModel, scenario_id: str) -> str:
+    fields = "".join(render_form_field(field) for field in panel.fields)
+    actions = "".join(render_action_button(button, scenario_id) for button in panel.actions)
+    status_items = "".join(render_status_item(item) for item in panel.status_items) or (
+        '<div class="placeholder-copy">No status is available for this section yet.</div>'
     )
-    secondary_live_data = "".join(render_live_data_series(series) for series in page.secondary_live_data) or (
-        '<div class="placeholder-copy">No secondary Pico monitor data is present for this scenario.</div>'
-    )
-    steps = "".join(render_run_step(step) for step in page.run_steps) or (
-        '<div class="placeholder-copy">No run has been started yet.</div>'
-    )
-    events = "".join(render_event_row(item) for item in page.event_log) or (
-        '<div class="placeholder-copy">The event timeline is empty until the run boundary emits events.</div>'
-    )
-    results_link = (
-        f'<a class="button-link ghost" href="/results?scenario={escape(scenario_id)}&session_id={escape(page.session_id)}">'
-        "Open Selected Result"
-        "</a>"
-        if page.session_id
-        else ""
-    )
+    notes = "".join(f"<li>{escape(note)}</li>" for note in panel.notes)
+    notes_markup = f'<ul class="notes-list">{notes}</ul>' if notes else ""
     return f"""
-    <div class="page-stack">
-      {render_page_topbar(surface_badges=page.surface_badges)}
-      <section class="panel hero">
-        <h2>{escape(page.title)}</h2>
-        <p class="panel-subtitle">{escape(page.subtitle)}</p>
-        {render_page_state(page.state)}
-        <div class="small">Run ID: {escape(page.run_id or 'not started')} | Session ID: {escape(page.session_id or 'none')}</div>
-        <div class="small">Current phase: {escape(page.run_phase_label)}</div>
-        <div class="panel-actions">
-          <form method="post" action="/run/start">
-            <input type="hidden" name="scenario" value="{escape(scenario_id)}">
-            <button type="submit">Start Run</button>
-          </form>
-          <form method="post" action="/run/abort">
-            <input type="hidden" name="scenario" value="{escape(scenario_id)}">
-            <button type="submit" class="secondary" {"disabled" if page.run_id is None else ""}>Abort</button>
-          </form>
-          {results_link}
-        </div>
-      </section>
-      {render_callouts(page.callouts)}
-      <section class="section-grid">{summaries}</section>
-      {tables}
-      <section class="section-grid">
-        <div class="panel">
-          <h3>{escape(page.section_header.title)}</h3>
-          <p class="panel-subtitle">{escape(page.section_header.subtitle)}</p>
-          {steps}
-        </div>
-        <div class="panel">
-          <h3>Primary HF2 Live Data</h3>
-          <p class="panel-subtitle">HF2 remains the primary scientific raw-data authority.</p>
-          {primary_live_data}
-        </div>
-        <div class="panel">
-          <h3>Pico Monitor Context</h3>
-          <p class="panel-subtitle">Secondary monitor traces are visible without taking ownership from HF2.</p>
-          {secondary_live_data}
-        </div>
-      </section>
-      <section class="panel">
-        <h3>Event Timeline</h3>
-        <p class="panel-subtitle">Structured run events emitted through the canonical path.</p>
-        {events}
-      </section>
-    </div>"""
+    <section class="panel state-accent">
+      <h3>{escape(panel.title)}</h3>
+      <p class="panel-subtitle">{escape(panel.subtitle)}</p>
+      {render_page_state(panel.state)}
+      <form method="post">
+        <input type="hidden" name="scenario" value="{escape(scenario_id)}">
+        <div class="field-grid">{fields}</div>
+        <div class="action-row">{actions}</div>
+      </form>
+      <div class="status-grid">{status_items}</div>
+      {notes_markup}
+    </section>"""
+
+
+def render_action_button(button: ActionButtonModel, scenario_id: str) -> str:
+    hidden_fields = "".join(
+        f'<input type="hidden" name="{escape(name)}" value="{escape(value)}">'
+        for name, value in button.hidden_fields
+    )
+    helper = f'<span class="button-note">{escape(button.helper_text)}</span>' if button.helper_text else ""
+    tone_class = "" if button.tone == "primary" else f" {escape(button.tone)}"
+    return (
+        '<div>'
+        f'{hidden_fields}<button type="submit" formaction="{escape(button.action)}"'
+        f' class="{tone_class.strip()}" {"disabled" if button.disabled else ""}>'
+        f"{escape(button.label)}</button>{helper}</div>"
+    )
+
+
+def render_status_item(item: StatusItemModel) -> str:
+    detail = f'<div class="small">{escape(item.detail)}</div>' if item.detail else ""
+    return (
+        '<div class="status-item">'
+        f'<div><strong>{escape(item.label)}</strong></div>'
+        f'<div><span class="status-label {escape(item.tone)}">{escape(item.value)}</span></div>'
+        f"{detail}</div>"
+    )
+
+
+def render_form_field(field: FormFieldModel) -> str:
+    if field.field_type == "select":
+        options = "".join(
+            f'<option value="{escape(option.value)}" {"selected" if option.selected else ""}>{escape(option.label)}</option>'
+            for option in field.options
+        )
+        control = (
+            f'<label for="{escape(field.name)}">{escape(field.label)}</label>'
+            f'<select id="{escape(field.name)}" name="{escape(field.name)}" {"disabled" if field.disabled else ""}>{options}</select>'
+        )
+    elif field.field_type == "textarea":
+        control = (
+            f'<label for="{escape(field.name)}">{escape(field.label)}</label>'
+            f'<textarea id="{escape(field.name)}" name="{escape(field.name)}" placeholder="{escape(field.placeholder)}" '
+            f'{"disabled" if field.disabled else ""}>{escape(field.value)}</textarea>'
+        )
+    else:
+        field_type = "number" if field.field_type == "number" else "text"
+        control = (
+            f'<label for="{escape(field.name)}">{escape(field.label)}</label>'
+            f'<input id="{escape(field.name)}" name="{escape(field.name)}" type="{field_type}" value="{escape(field.value)}" '
+            f'placeholder="{escape(field.placeholder)}" {"disabled" if field.disabled else ""}>'
+        )
+    help_markup = f'<div class="field-help">{escape(field.help_text)}</div>' if field.help_text else ""
+    return f'<div class="field">{control}{help_markup}</div>'
 
 
 def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
-    sessions = "".join(render_session_card(card, scenario_id) for card in page.sessions) or (
-        '<div class="placeholder-copy">No saved sessions are available for this scenario.</div>'
+    sessions = "".join(render_session_card(card, scenario_id, target="results") for card in page.sessions) or (
+        '<div class="placeholder-copy">No saved sessions are available yet.</div>'
     )
     details = "".join(render_summary_panel(panel) for panel in page.detail_panels) or (
-        '<div class="placeholder-copy">Select a session to inspect the persisted manifest summary.</div>'
+        '<div class="placeholder-copy">Select a session to inspect the saved summary.</div>'
     )
     artifacts = "".join(render_summary_panel(panel) for panel in page.artifact_panels) or (
-        '<div class="placeholder-copy">Persisted artifact groups will appear once a session is selected.</div>'
+        '<div class="placeholder-copy">Artifact groups appear after a session is selected.</div>'
     )
-    tables = "".join(render_table_section(table) for table in page.tables)
+    storage = "".join(render_summary_panel(panel) for panel in page.storage_panels)
     events = "".join(render_event_row(item) for item in page.event_log) or (
-        '<div class="placeholder-copy">The persisted session timeline is empty for this selection.</div>'
+        '<div class="placeholder-copy">No saved event timeline is available for this selection.</div>'
     )
     return f"""
     <div class="page-stack">
-      {render_page_topbar(surface_badges=page.surface_badges)}
-      <section class="panel hero">
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
-        <p class="panel-subtitle">{escape(page.subtitle)}</p>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
-      <section class="section-grid">
+      <section class="panel-grid">
         <div class="panel">
-          <h3>{escape(page.section_header.title)}</h3>
-          <p class="panel-subtitle">{escape(page.section_header.subtitle)}</p>
+          <h3>Recent Sessions</h3>
+          <p class="panel-subtitle">Pick a saved session and review the persisted record.</p>
           {sessions}
         </div>
         <div class="panel">
           <h3>Selected Session</h3>
-          <p class="panel-subtitle">Results reads the saved session and artifact graph rather than live widget state.</p>
+          <p class="panel-subtitle">Human-readable summary of the saved manifest, outcome, and replay context.</p>
           {details}
         </div>
       </section>
-      {tables}
-      <section class="section-grid">{artifacts}</section>
+      <section class="panel-grid">
+        <div class="panel">
+          <h3>Artifacts and Provenance</h3>
+          <p class="panel-subtitle">Saved raw, processed, analysis, and export groups remain separated.</p>
+          {artifacts}
+        </div>
+        <div class="panel">
+          <h3>Storage Details</h3>
+          <p class="panel-subtitle">Basic durable session details that can already be shown honestly.</p>
+          {storage or '<div class="placeholder-copy">Storage details appear when a session is selected.</div>'}
+        </div>
+      </section>
       <section class="panel">
-        <h3>Persisted Event Timeline</h3>
-        <p class="panel-subtitle">Results reads saved run events instead of relying on live runtime state.</p>
+        <h3>Session Activity</h3>
+        <p class="panel-subtitle">Persisted run events for the selected session.</p>
         {events}
       </section>
     </div>"""
+
+
+def render_advanced_page(page: AdvancedPageModel) -> str:
+    sections = "".join(render_advanced_section(section) for section in page.sections)
+    return f"""
+    <div class="page-stack">
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
+        <h2>{escape(page.title)}</h2>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {render_page_state(page.state)}
+      </section>
+      {render_callouts(page.callouts)}
+      {sections}
+    </div>"""
+
+
+def render_advanced_section(section: AdvancedSectionModel) -> str:
+    summaries = "".join(render_summary_panel(panel) for panel in section.summary_panels)
+    tables = "".join(render_table_section(table) for table in section.tables)
+    notes = "".join(f"<li>{escape(note)}</li>" for note in section.notes)
+    notes_markup = f'<ul class="notes-list">{notes}</ul>' if notes else ""
+    open_attr = " open" if section.open_by_default else ""
+    return f"""
+    <section class="panel">
+      <details class="accordion"{open_attr}>
+        <summary>{escape(section.title)}</summary>
+        <p class="panel-subtitle">{escape(section.subtitle)}</p>
+        <div class="panel-grid">{summaries}</div>
+        {tables}
+        {notes_markup}
+      </details>
+    </section>"""
 
 
 def render_analyze_page(page: AnalyzePageModel, scenario_id: str) -> str:
@@ -623,63 +632,59 @@ def render_analyze_page(page: AnalyzePageModel, scenario_id: str) -> str:
     summaries = "".join(render_summary_panel(panel) for panel in page.summary_panels) or (
         '<div class="placeholder-copy">Select a session to inspect analysis context.</div>'
     )
-    forms = "".join(render_form_section(section) for section in page.form_sections)
     tables = "".join(render_table_section(table) for table in page.tables)
     return f"""
     <div class="page-stack">
-      {render_page_topbar(surface_badges=page.surface_badges)}
-      <section class="panel hero">
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
-        <p class="panel-subtitle">{escape(page.subtitle)}</p>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
-      <section class="section-grid">
+      <section class="panel-grid">
         <div class="panel">
-          <h3>{escape(page.section_header.title)}</h3>
-          <p class="panel-subtitle">{escape(page.section_header.subtitle)}</p>
+          <h3>Available Sessions</h3>
+          <p class="panel-subtitle">Analyze stays secondary and starts from saved session truth.</p>
           {sessions}
         </div>
         <div class="panel">
-          <h3>Analysis Context</h3>
-          <p class="panel-subtitle">The visible surface is driven from persisted session truth and explicit scaffold labels.</p>
+          <h3>Analyze Preview</h3>
+          <p class="panel-subtitle">Small, explicit signals for what exists now and what is deferred.</p>
           {summaries}
         </div>
       </section>
-      <section class="section-grid">{forms}</section>
       {tables}
     </div>"""
 
 
 def render_service_page(page: ServicePageModel) -> str:
-    cards = "".join(render_device_card(card) for card in page.device_cards)
-    notes = "".join(f"<li>{escape(note)}</li>" for note in page.notes)
+    cards = "".join(render_device_card(card) for card in page.device_cards) or (
+        '<div class="placeholder-copy">No device summaries are available.</div>'
+    )
     diagnostics = "".join(render_summary_panel(panel) for panel in page.diagnostic_panels)
-    forms = "".join(render_form_section(section) for section in page.form_sections)
     tables = "".join(render_table_section(table) for table in page.tables)
     return f"""
     <div class="page-stack">
-      {render_page_topbar(surface_badges=page.surface_badges)}
-      <section class="panel hero">
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
-        <p class="panel-subtitle">{escape(page.subtitle)}</p>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
-      <section class="section-grid">
+      <section class="panel-grid">
         <div class="panel">
-          <h3>{escape(page.section_header.title)}</h3>
-          <p class="panel-subtitle">{escape(page.section_header.subtitle)}</p>
+          <h3>Device Diagnostics</h3>
+          <p class="panel-subtitle">Expert-only summaries for bench and maintenance work.</p>
           {cards}
         </div>
         <div class="panel">
-          <h3>Service Limits</h3>
-          <p class="panel-subtitle">Expert-only actions stay outside the default operator flow.</p>
-          <ul class="notes-list">{notes}</ul>
+          <h3>Service Context</h3>
+          <p class="panel-subtitle">What this surface owns and what stays out of the default operator path.</p>
+          {diagnostics or '<div class="placeholder-copy">No service diagnostics are available.</div>'}
         </div>
       </section>
-      <section class="section-grid">{diagnostics}</section>
-      <section class="section-grid">{forms}</section>
       {tables}
     </div>"""
 
@@ -690,220 +695,75 @@ def render_summary_panel(panel: SummaryPanel) -> str:
     )
     return f"""
     <div class="panel">
-      <h3>{escape(panel.title)}</h3>
+      <h4>{escape(panel.title)}</h4>
       <p class="panel-subtitle">{escape(panel.subtitle)}</p>
       {rows}
     </div>"""
 
 
-def render_form_section(section: FormSectionModel) -> str:
-    fields = "".join(render_form_field(field) for field in section.fields)
-    notes = "".join(f"<li>{escape(note)}</li>" for note in section.notes)
-    details = ""
-    if notes:
-        details = (
-            "<details><summary>Section Notes</summary>"
-            f'<ul class="notes-list">{notes}</ul>'
-            "</details>"
-        )
-    return f"""
-    <div class="panel">
-      <h3>{escape(section.title)}</h3>
-      <p class="panel-subtitle">{escape(section.subtitle)}</p>
-      <div class="form-grid">{fields}</div>
-      {details}
-    </div>"""
-
-
-def render_form_field(field: FormFieldModel) -> str:
-    field_id = _field_id(field.label)
-    if field.field_type == "textarea":
-        control = (
-            f'<textarea id="{field_id}" placeholder="{escape(field.placeholder)}" '
-            f'{"disabled" if field.disabled else ""}>{escape(field.value)}</textarea>'
-        )
-        wrapper_class = "field"
-    elif field.field_type == "select":
-        options = "".join(
-            f'<option value="{escape(option.value)}" {"selected" if option.selected else ""}>'
-            f"{escape(option.label)}</option>"
-            for option in field.options
-        )
-        control = f'<select id="{field_id}" {"disabled" if field.disabled else ""}>{options}</select>'
-        wrapper_class = "field"
-    elif field.field_type == "checkbox":
-        control = (
-            f'<input id="{field_id}" type="checkbox" '
-            f'{"checked" if field.checked else ""} {"disabled" if field.disabled else ""}>'
-        )
-        wrapper_class = "field checkbox-field"
-    else:
-        input_type = "number" if field.field_type == "number" else "text"
-        control = (
-            f'<input id="{field_id}" type="{input_type}" value="{escape(field.value)}" '
-            f'placeholder="{escape(field.placeholder)}" {"disabled" if field.disabled else ""}>'
-        )
-        wrapper_class = "field"
-
-    if field.field_type == "checkbox":
-        label_markup = f'<label for="{field_id}">{escape(field.label)}</label>'
-        help_markup = (
-            f'<div class="field-help">{escape(field.help_text)}</div>' if field.help_text else ""
-        )
-        return f'<div class="{wrapper_class}">{control}<div>{label_markup}{help_markup}</div></div>'
-
-    help_markup = f'<div class="field-help">{escape(field.help_text)}</div>' if field.help_text else ""
-    return f"""
-    <div class="{wrapper_class}">
-      <label for="{field_id}">{escape(field.label)}</label>
-      {control}
-      {help_markup}
-    </div>"""
-
-
 def render_table_section(table: TableModel) -> str:
-    header_cells = "".join(f"<th>{escape(header)}</th>" for header in table.headers)
-    if table.rows:
-        rows = "".join(
-            "<tr>" + "".join(f"<td>{escape(cell)}</td>" for cell in row) + "</tr>"
-            for row in table.rows
-        )
-    else:
+    headers = "".join(f"<th>{escape(header)}</th>" for header in table.headers)
+    rows = "".join(
+        "<tr>" + "".join(f"<td>{escape(cell)}</td>" for cell in row) + "</tr>"
+        for row in table.rows
+    )
+    if not rows:
         rows = f'<tr><td colspan="{max(len(table.headers), 1)}" class="placeholder-copy">{escape(table.empty_message)}</td></tr>'
     return f"""
     <section class="panel">
-      <h3>{escape(table.title)}</h3>
+      <h4>{escape(table.title)}</h4>
       <p class="panel-subtitle">{escape(table.subtitle)}</p>
       <table class="data-table">
-        <thead><tr>{header_cells}</tr></thead>
+        <thead><tr>{headers}</tr></thead>
         <tbody>{rows}</tbody>
       </table>
     </section>"""
 
 
 def render_device_card(card: DeviceSummaryCard) -> str:
-    details = "".join(f"<li>{escape(detail)}</li>" for detail in card.details)
+    details = "".join(f"<li>{escape(item)}</li>" for item in card.details)
     return f"""
     <div class="device-card">
-      <strong>{escape(card.device_label)}</strong>
+      <div><strong>{escape(card.device_label)}</strong></div>
       <div><span class="status-label {escape(card.tone)}">{escape(card.status_label)}</span></div>
       <div>{escape(card.summary)}</div>
       {'<ul class="detail-list">' + details + '</ul>' if details else ''}
     </div>"""
 
 
-def render_readiness_row(row) -> str:
-    tone = {
-        "pass": "good",
-        "warn": "warn",
-        "block": "bad",
-    }.get(row.state, "neutral")
-    details = "".join(f"<li>{escape(detail)}</li>" for detail in row.details)
-    return f"""
-    <div class="readiness-row">
-      <strong>{escape(row.label)}</strong>
-      <div><span class="status-label {tone}">{escape(row.state.upper())}</span></div>
-      <div>{escape(row.summary)}</div>
-      {'<ul class="detail-list">' + details + '</ul>' if details else ''}
-    </div>"""
-
-
-def render_preflight_report(report: PreflightReport | None) -> str:
-    if report is None:
-        return '<div class="placeholder-copy">Preflight has not been requested yet.</div>'
-    rows = []
-    for check in report.checks:
-        issues = "; ".join(issue.message for issue in check.issues) if check.issues else "No issues."
-        rows.append(
-            "<tr>"
-            f"<td>{escape(check.target)}</td>"
-            f"<td>{escape(check.state.value)}</td>"
-            f"<td>{escape(check.summary)}</td>"
-            f"<td>{escape(issues)}</td>"
-            "</tr>"
-        )
-    readiness = "ready" if report.ready_to_start else "blocked"
-    return (
-        f'<div class="small">Generated {escape(report.generated_at.isoformat())} | Overall: {readiness}</div>'
-        '<table class="data-table"><thead><tr><th>Target</th><th>State</th><th>Summary</th><th>Issues</th>'
-        "</tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table>"
-    )
-
-
 def render_event_row(item: EventLogItem) -> str:
     return f"""
     <div class="event-row">
-      <strong>{escape(item.source)}</strong>
-      <div class="small">{escape(item.timestamp.isoformat())}</div>
+      <div><strong>{escape(item.source)}</strong></div>
       <div>{escape(item.message)}</div>
+      <div class="small">{escape(item.timestamp.isoformat())}</div>
     </div>"""
 
 
-def render_live_data_series(series: LiveDataSeries) -> str:
-    rows = "".join(
-        "<tr>"
-        f"<td>{point.axis_value:.1f}</td>"
-        f"<td>{point.value:.3f}</td>"
-        "</tr>"
-        for point in series.points
-    )
-    return (
-        f'<div class="table-note"><strong>{escape(series.label)}</strong></div>'
-        f'<div class="small">{escape(series.role_label)}</div>'
-        '<table class="data-table"><thead><tr>'
-        f"<th>{escape(series.axis_label)} ({escape(series.axis_units)})</th>"
-        f"<th>Value ({escape(series.units)})</th>"
-        "</tr></thead><tbody>"
-        + rows
-        + "</tbody></table>"
-    )
-
-
-def render_run_step(step: RunStepSummary) -> str:
-    return f"""
-    <div class="timeline-step">
-      <strong>{escape(step.phase_label)}</strong>
-      <div><span class="status-label {escape(step.tone)}">{step.progress_fraction:.0%}</span></div>
-      <div>{escape(step.active_step)}</div>
-      <div class="small">{escape(step.summary)}</div>
-    </div>"""
-
-
-def render_session_card(card: SessionSummaryCard, scenario_id: str, *, target: str = "results") -> str:
-    tone = {
-        "Completed": "good",
-        "Faulted": "bad",
-        "Aborted": "warn",
-    }.get(card.status_label, "neutral")
-    failure_reason = (
+def render_session_card(card: SessionSummaryCard, scenario_id: str, *, target: str) -> str:
+    tone = "good" if card.replay_ready else ("warn" if card.failure_reason_label is None else "bad")
+    failure = (
         f'<div class="small">Failure reason: {escape(card.failure_reason_label)}</div>'
         if card.failure_reason_label
         else ""
     )
-    results_link = f"/results?scenario={escape(scenario_id)}&session_id={escape(card.session_id)}"
     analyze_link = f"/analyze?scenario={escape(scenario_id)}&session_id={escape(card.session_id)}"
     return f"""
     <div class="session-card">
-      <strong>{escape(card.recipe_title)}</strong>
+      <div><strong>{escape(card.recipe_title)}</strong></div>
       <div><span class="status-label {tone}">{escape(card.status_label)}</span></div>
       <div class="small">Session {escape(card.session_id)} updated {escape(card.updated_at.isoformat())}</div>
       <div class="small">Primary raw {card.primary_raw_artifact_count} | Secondary monitor {card.secondary_monitor_artifact_count}</div>
       <div class="small">Processed {card.processed_artifact_count} | Analysis {card.analysis_artifact_count} | Export {card.export_artifact_count}</div>
       <div class="small">Events {card.event_count} | Replay {'ready' if card.replay_ready else 'unavailable'}</div>
-      {failure_reason}
-      <div class="panel-actions">
-        <form method="post" action="/results/reopen">
+      {failure}
+      <div class="toolbar-row">
+        <form method="post" action="/operate/session/open">
           <input type="hidden" name="scenario" value="{escape(scenario_id)}">
           <input type="hidden" name="session_id" value="{escape(card.session_id)}">
-          <button type="submit" class="secondary">Reopen Session</button>
+          <button type="submit" class="secondary">Open in Operate</button>
         </form>
-        <a class="button-link secondary" href="{results_link}">Open Results</a>
-        <a class="button-link ghost" href="{analyze_link}">{"Stay in Analyze" if target == "analyze" else "Open Analyze"}</a>
+        <a class="button-link {'secondary' if target == 'results' else 'ghost'}" href="/results?scenario={escape(scenario_id)}&session_id={escape(card.session_id)}">Open Results</a>
+        <a class="button-link ghost" href="{analyze_link}">Analyze</a>
       </div>
     </div>"""
-
-
-def _field_id(label: str) -> str:
-    return "".join(character.lower() if character.isalnum() else "-" for character in label).strip("-")

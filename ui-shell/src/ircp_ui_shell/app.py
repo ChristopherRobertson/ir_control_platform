@@ -1,4 +1,4 @@
-"""Minimal WSGI application for the workflow-first UI shell."""
+"""Minimal WSGI application for the operator-first UI shell."""
 
 from __future__ import annotations
 
@@ -7,14 +7,16 @@ from io import BytesIO
 from typing import Callable, Mapping
 from urllib.parse import parse_qs
 
+from ircp_contracts import HF2SampleComponent
+
 from .boundaries import UiRuntimeGateway
 from .components import (
+    render_advanced_page,
     render_analyze_page,
     render_layout,
+    render_operate_page,
     render_results_page,
-    render_run_page,
     render_service_page,
-    render_setup_page,
 )
 
 
@@ -43,7 +45,7 @@ class IRCPUiApp:
             return self._respond(start_response, "404 Not Found", f"Unknown scenario: {scenario_id}")
 
         if path == "/":
-            return self._redirect(start_response, f"/setup?scenario={scenario_id}")
+            return self._redirect(start_response, f"/operate?scenario={scenario_id}")
 
         if method == "POST":
             return self._handle_post(start_response, runtime, path, scenario_id, form)
@@ -58,42 +60,32 @@ class IRCPUiApp:
         scenario_id: str,
         query: dict[str, list[str]],
     ) -> list[bytes]:
-        if path in {"/setup", "/setup/advanced", "/setup/calibrated"}:
-            header = asyncio.run(runtime.get_header_status("setup"))
-            surface = {
-                "/setup": "setup",
-                "/setup/advanced": "advanced",
-                "/setup/calibrated": "calibrated",
-            }[path]
-            page = asyncio.run(runtime.get_setup_page(surface=surface))
-            return self._html(
-                start_response,
-                render_layout(header, render_setup_page(page, scenario_id, surface)),
-            )
-        if path == "/run":
-            header = asyncio.run(runtime.get_header_status("run"))
-            page = asyncio.run(runtime.get_run_page())
-            return self._html(start_response, render_layout(header, render_run_page(page, scenario_id)))
+        if path in {"/setup", "/run"}:
+            return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+        if path in {"/setup/advanced", "/setup/calibrated"}:
+            return self._redirect(start_response, f"/advanced?scenario={scenario_id}")
+        if path == "/operate":
+            header = asyncio.run(runtime.get_header_status("operate"))
+            page = asyncio.run(runtime.get_operate_page())
+            return self._html(start_response, render_layout(header, render_operate_page(page, scenario_id)))
         if path == "/results":
             selected_session_id = _extract_value(query, "session_id")
             header = asyncio.run(runtime.get_header_status("results"))
             page = asyncio.run(runtime.get_results_page(selected_session_id=selected_session_id))
-            return self._html(
-                start_response,
-                render_layout(header, render_results_page(page, scenario_id)),
-            )
-        if path == "/analyze":
-            selected_session_id = _extract_value(query, "session_id")
-            header = asyncio.run(runtime.get_header_status("analyze"))
-            page = asyncio.run(runtime.get_analyze_page(selected_session_id=selected_session_id))
-            return self._html(
-                start_response,
-                render_layout(header, render_analyze_page(page, scenario_id)),
-            )
+            return self._html(start_response, render_layout(header, render_results_page(page, scenario_id)))
+        if path == "/advanced":
+            header = asyncio.run(runtime.get_header_status("advanced"))
+            page = asyncio.run(runtime.get_advanced_page())
+            return self._html(start_response, render_layout(header, render_advanced_page(page)))
         if path == "/service":
             header = asyncio.run(runtime.get_header_status("service"))
             page = asyncio.run(runtime.get_service_page())
             return self._html(start_response, render_layout(header, render_service_page(page)))
+        if path == "/analyze":
+            selected_session_id = _extract_value(query, "session_id")
+            header = asyncio.run(runtime.get_header_status("analyze"))
+            page = asyncio.run(runtime.get_analyze_page(selected_session_id=selected_session_id))
+            return self._html(start_response, render_layout(header, render_analyze_page(page, scenario_id)))
         return self._respond(start_response, "404 Not Found", f"No route for {path}")
 
     def _handle_post(
@@ -105,25 +97,75 @@ class IRCPUiApp:
         form: dict[str, list[str]],
     ) -> list[bytes]:
         try:
-            if path == "/setup/preflight":
-                surface = _extract_value(form, "surface") or "setup"
-                asyncio.run(runtime.run_preflight())
-                return self._redirect(start_response, f"{_setup_path(surface)}?scenario={scenario_id}")
-            if path == "/run/start":
-                asyncio.run(runtime.start_run())
-                return self._redirect(start_response, f"/run?scenario={scenario_id}")
-            if path == "/run/abort":
-                asyncio.run(runtime.abort_active_run())
-                return self._redirect(start_response, f"/run?scenario={scenario_id}")
-            if path == "/results/reopen":
-                session_id = _extract_value(form, "session_id")
-                if session_id is None:
-                    return self._respond(start_response, "400 Bad Request", "Missing session_id.")
-                asyncio.run(runtime.reopen_session(session_id))
-                return self._redirect(
-                    start_response,
-                    f"/results?scenario={scenario_id}&session_id={session_id}",
+            if path == "/operate/session/save":
+                asyncio.run(
+                    runtime.save_session(
+                        session_label=_extract_value(form, "session_label") or "",
+                        sample_id=_extract_value(form, "sample_id") or "",
+                        operator_notes=_extract_value(form, "operator_notes") or "",
+                    )
                 )
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/session/open":
+                session_id = _require_value(form, "session_id")
+                asyncio.run(runtime.open_saved_session(session_id))
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/connect":
+                asyncio.run(runtime.connect_laser())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/disconnect":
+                asyncio.run(runtime.disconnect_laser())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/arm":
+                asyncio.run(runtime.arm_laser())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/disarm":
+                asyncio.run(runtime.disarm_laser())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/emission/on":
+                asyncio.run(runtime.set_laser_emission(True))
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/emission/off":
+                asyncio.run(runtime.set_laser_emission(False))
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/tune":
+                asyncio.run(runtime.tune_laser(_require_float(form, "tune_target_cm1")))
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/scan/start":
+                asyncio.run(runtime.start_scan())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/laser/scan/stop":
+                asyncio.run(runtime.stop_scan())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/hf2/connect":
+                asyncio.run(runtime.connect_hf2())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/hf2/disconnect":
+                asyncio.run(runtime.disconnect_hf2())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/hf2/start":
+                asyncio.run(
+                    runtime.start_hf2_acquisition(
+                        demod_index=_require_int(form, "hf2_demod_index"),
+                        component=HF2SampleComponent(_require_value(form, "hf2_component")),
+                        sample_rate_hz=_require_float(form, "hf2_sample_rate_hz"),
+                        harmonic=_require_int(form, "hf2_harmonic"),
+                        capture_interval_seconds=_require_float(form, "hf2_capture_interval_seconds"),
+                    )
+                )
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/hf2/stop":
+                asyncio.run(runtime.stop_hf2_acquisition())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/run/preflight":
+                asyncio.run(runtime.run_preflight())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/run/start":
+                asyncio.run(runtime.start_run())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
+            if path == "/operate/run/abort":
+                asyncio.run(runtime.abort_active_run())
+                return self._redirect(start_response, f"/operate?scenario={scenario_id}")
         except Exception as exc:  # pragma: no cover - exercised through page-state projections instead
             return self._respond(start_response, "500 Internal Server Error", str(exc))
         return self._respond(start_response, "404 Not Found", f"No action for {path}")
@@ -161,12 +203,19 @@ def _extract_value(values: Mapping[str, list[str]], key: str) -> str | None:
     return items[0]
 
 
-def _setup_path(surface: str) -> str:
-    if surface == "advanced":
-        return "/setup/advanced"
-    if surface == "calibrated":
-        return "/setup/calibrated"
-    return "/setup"
+def _require_value(values: Mapping[str, list[str]], key: str) -> str:
+    value = _extract_value(values, key)
+    if value is None:
+        raise ValueError(f"Missing required field: {key}")
+    return value
+
+
+def _require_int(values: Mapping[str, list[str]], key: str) -> int:
+    return int(_require_value(values, key))
+
+
+def _require_float(values: Mapping[str, list[str]], key: str) -> float:
+    return float(_require_value(values, key))
 
 
 def create_ui_app(runtimes: Mapping[str, UiRuntimeGateway], default_scenario: str = "nominal") -> IRCPUiApp:
