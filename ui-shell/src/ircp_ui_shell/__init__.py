@@ -10,8 +10,13 @@ from .boundaries import (
     UiSubscriptionService,
 )
 from .models import (
+    AnalyzePageModel,
+    CalloutModel,
     DeviceSummaryCard,
     EventLogItem,
+    FormFieldModel,
+    FormOptionModel,
+    FormSectionModel,
     HeaderStatus,
     LiveDataPointModel,
     LiveDataSeries,
@@ -27,13 +32,19 @@ from .models import (
     SetupPageModel,
     StatusBadge,
     SummaryPanel,
+    TableModel,
 )
 from .page_state import PageStateKind, PageStateModel
 
 __all__ = [
+    "AnalyzePageModel",
+    "CalloutModel",
     "ControlPlaneClient",
     "DeviceSummaryCard",
     "EventLogItem",
+    "FormFieldModel",
+    "FormOptionModel",
+    "FormSectionModel",
     "HeaderStatus",
     "IRCPUiApp",
     "LiveDataPointModel",
@@ -53,6 +64,7 @@ __all__ = [
     "SetupPageModel",
     "StatusBadge",
     "SummaryPanel",
+    "TableModel",
     "UiCommandService",
     "UiQueryService",
     "UiRuntimeGateway",

@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 from ircp_contracts import ExperimentPreset, ExperimentRecipe, PreflightReport, RunState, SessionManifest
 
 from .models import (
+    AnalyzePageModel,
     EventLogItem,
     HeaderStatus,
     LiveDataSeries,
@@ -52,14 +53,17 @@ class UiQueryService(Protocol):
     async def get_header_status(self, active_route: str) -> HeaderStatus:
         """Return the shell header, route navigation, and global status badges."""
 
-    async def get_setup_page(self) -> SetupPageModel:
-        """Return the Setup scaffold model."""
+    async def get_setup_page(self, surface: str = "setup") -> SetupPageModel:
+        """Return the Setup, Advanced, or Calibrated scaffold model."""
 
     async def get_run_page(self) -> RunPageModel:
         """Return the Run scaffold model."""
 
     async def get_results_page(self, selected_session_id: str | None = None) -> ResultsPageModel:
         """Return the Results scaffold model."""
+
+    async def get_analyze_page(self, selected_session_id: str | None = None) -> AnalyzePageModel:
+        """Return the Analyze scaffold model."""
 
     async def get_service_page(self) -> ServicePageModel:
         """Return the Service scaffold model."""

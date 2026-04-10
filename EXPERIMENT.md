@@ -9,11 +9,12 @@ It is normative for:
 - what the operator controls
 - what the system records
 - how the supported v1 experiment is modeled
-- how the control model maps into Setup, Advanced, Calibrated, Run, Results, Analyze, and Service surfaces
+- how the control model maps into the default `Operate` workflow plus secondary Advanced, Calibrated, Results, Analyze, and Service surfaces
 
 Document relationship:
 
 - `AGENTS.md` defines the finished product, workflow-first architecture, and package boundaries.
+- `docs/operator_ui_mvp.md` defines the next-pass operator-facing UI target.
 - `docs/ui_foundation.md` defines the active UI foundation and workflow surface model.
 - `REFACTOR.md` defines migration constraints, salvage rules, and forbidden legacy patterns.
 - `PLANS.md` defines sequencing, milestones, and execution mechanics.
@@ -370,11 +371,9 @@ Placeholder note for future work:
 
 - A future phase may introduce direct OPO control only as a new first-class subsystem with its own contracts, timing semantics, validation, and UI mapping. It must not be smuggled into v1 as an expert-only side path.
 
-## 12. Implications for implementation phases
+## 12. Implications for the next implementation pass
 
-This document changes the interpretation of the remaining phases.
-
-The supported slice is no longer "MIRcat + HF2LI only". The supported v1 implementation slice is:
+The supported v1 implementation slice remains:
 
 - MIRcat
 - HF2LI
@@ -385,16 +384,13 @@ The supported slice is no longer "MIRcat + HF2LI only". The supported v1 impleme
 - Nd:YAG timing semantics through T660-2
 - OPO placeholder only
 
-Phase implications:
+The next implementation pass is the operator-first UI MVP defined in `docs/operator_ui_mvp.md`.
 
-- The existing Phase 3A UI and runtime work remains valid as historical proof of the shell boundary and workflow-first direction.
-- Active UI foundation guidance now lives in `docs/ui_foundation.md`.
-- The next phase must expand the contracts, simulator model, engine semantics, and UI control surfaces beyond the narrower MIRcat + HF2LI-only assumption.
-- That expansion must add the canonical `T0` timing model, master/slave timing semantics, pump-shot behavior, probe continuous versus synchronized behavior, MUX route selection, PicoScope secondary recording, and persisted timing context.
+Implications for that pass:
+
+- The default operator-facing surface should expose only the routine controls needed to operate the supported v1 slice.
+- That default surface should emphasize session and sample identity, laser controls, HF2LI acquisition controls, run control, live status, and recent warnings.
+- Detailed timing, MUX routing, PicoScope secondary capture, calibration references, and service tooling belong behind Advanced, Calibrated, or Service surfaces rather than dominating the default path.
+- Backend expansion should follow the reviewed UI priority order. Do not widen contracts, engine behavior, or hardware surfaces only because the full v1 model is broader.
+- When additional timing or routing detail is surfaced, it must still follow the canonical `T0` model and the existing single-path, fail-fast architecture.
 - Direct OPO control remains out of scope while this supported v1 slice is being implemented.
-
-Recommended next implementation milestone:
-
-- `Phase 3B — Supported v1 experiment model expansion`
-
-That milestone should expand the simulator-backed and contract-backed system to the full supported v1 experiment model while preserving the existing single-path, fail-fast architecture and without introducing device-first UI structure.

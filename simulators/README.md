@@ -1,13 +1,13 @@
 # simulators
 
-Deterministic simulator bundle contracts and Phase 3A scenario fixtures for the first MIRcat + HF2LI slice.
+Deterministic simulator bundles and scenario fixtures for the supported v1 control slice.
 
-- Owns: simulator scenario catalogs, nominal and failure fixtures, and simulated MIRcat/HF2LI adapters.
+- Owns: simulator scenario catalogs, nominal and failure fixtures, and simulated device adapters.
 - Depends on: `contracts`, `drivers`.
 - Must not leak simulator-only shortcuts into production contracts.
 
-Phase 3A scenarios:
-
-- `nominal`
-- `blocked`
-- `faulted`
+Typical scenario classes:
+- nominal
+- blocked or preflight-failure scenarios
+- warning or degraded scenarios
+- faulted scenarios

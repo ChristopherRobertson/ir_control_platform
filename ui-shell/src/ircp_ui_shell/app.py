@@ -1,4 +1,4 @@
-"""Minimal WSGI application for the Phase 3A UI shell."""
+"""Minimal WSGI application for the workflow-first UI shell."""
 
 from __future__ import annotations
 
@@ -8,7 +8,14 @@ from typing import Callable, Mapping
 from urllib.parse import parse_qs
 
 from .boundaries import UiRuntimeGateway
-from .components import render_layout, render_results_page, render_run_page, render_service_page, render_setup_page
+from .components import (
+    render_analyze_page,
+    render_layout,
+    render_results_page,
+    render_run_page,
+    render_service_page,
+    render_setup_page,
+)
 
 
 StartResponse = Callable[[str, list[tuple[str, str]]], None]
@@ -51,10 +58,18 @@ class IRCPUiApp:
         scenario_id: str,
         query: dict[str, list[str]],
     ) -> list[bytes]:
-        if path == "/setup":
+        if path in {"/setup", "/setup/advanced", "/setup/calibrated"}:
             header = asyncio.run(runtime.get_header_status("setup"))
-            page = asyncio.run(runtime.get_setup_page())
-            return self._html(start_response, render_layout(header, render_setup_page(page, scenario_id)))
+            surface = {
+                "/setup": "setup",
+                "/setup/advanced": "advanced",
+                "/setup/calibrated": "calibrated",
+            }[path]
+            page = asyncio.run(runtime.get_setup_page(surface=surface))
+            return self._html(
+                start_response,
+                render_layout(header, render_setup_page(page, scenario_id, surface)),
+            )
         if path == "/run":
             header = asyncio.run(runtime.get_header_status("run"))
             page = asyncio.run(runtime.get_run_page())
@@ -66,6 +81,14 @@ class IRCPUiApp:
             return self._html(
                 start_response,
                 render_layout(header, render_results_page(page, scenario_id)),
+            )
+        if path == "/analyze":
+            selected_session_id = _extract_value(query, "session_id")
+            header = asyncio.run(runtime.get_header_status("analyze"))
+            page = asyncio.run(runtime.get_analyze_page(selected_session_id=selected_session_id))
+            return self._html(
+                start_response,
+                render_layout(header, render_analyze_page(page, scenario_id)),
             )
         if path == "/service":
             header = asyncio.run(runtime.get_header_status("service"))
@@ -83,8 +106,9 @@ class IRCPUiApp:
     ) -> list[bytes]:
         try:
             if path == "/setup/preflight":
+                surface = _extract_value(form, "surface") or "setup"
                 asyncio.run(runtime.run_preflight())
-                return self._redirect(start_response, f"/setup?scenario={scenario_id}")
+                return self._redirect(start_response, f"{_setup_path(surface)}?scenario={scenario_id}")
             if path == "/run/start":
                 asyncio.run(runtime.start_run())
                 return self._redirect(start_response, f"/run?scenario={scenario_id}")
@@ -135,6 +159,14 @@ def _extract_value(values: Mapping[str, list[str]], key: str) -> str | None:
     if not items:
         return None
     return items[0]
+
+
+def _setup_path(surface: str) -> str:
+    if surface == "advanced":
+        return "/setup/advanced"
+    if surface == "calibrated":
+        return "/setup/calibrated"
+    return "/setup"
 
 
 def create_ui_app(runtimes: Mapping[str, UiRuntimeGateway], default_scenario: str = "nominal") -> IRCPUiApp:

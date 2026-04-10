@@ -74,8 +74,33 @@ class Phase3BUiFoundationTests(unittest.TestCase):
 
         self.assertEqual(status, "200 OK")
         self.assertIn("Supported v1 pump-probe scan", body)
-        self.assertIn("T0 Timing", body)
-        self.assertIn("Pico Secondary", body)
+        self.assertIn("Session and Sample Identity", body)
+        self.assertIn("Default Experiment Path", body)
+        self.assertIn("Calibration and Monitoring Context", body)
+
+    def test_advanced_and_calibrated_routes_render_reviewable_controls(self) -> None:
+        app = self._create_app()
+
+        advanced_status, _headers, advanced_body = _call_wsgi(
+            app,
+            method="GET",
+            path="/setup/advanced?scenario=nominal",
+        )
+        calibrated_status, _headers, calibrated_body = _call_wsgi(
+            app,
+            method="GET",
+            path="/setup/calibrated?scenario=nominal",
+        )
+
+        self.assertEqual(advanced_status, "200 OK")
+        self.assertIn("Timing Program", advanced_body)
+        self.assertIn("Capture and Routing", advanced_body)
+        self.assertIn("Expert only", advanced_body)
+
+        self.assertEqual(calibrated_status, "200 OK")
+        self.assertIn("Calibration References", calibrated_body)
+        self.assertIn("Fixed Installation Assumptions", calibrated_body)
+        self.assertIn("Guarded defaults", calibrated_body)
 
     def test_blocked_timing_scenario_shows_explicit_blocked_state(self) -> None:
         runtimes = self._create_runtime_map()
@@ -143,6 +168,20 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         self.assertGreater(len(results_page.artifact_panels), 0)
         self.assertGreater(len(results_page.event_log), 0)
 
+    def test_analyze_route_renders_visible_scaffold_from_persisted_session(self) -> None:
+        app = self._create_app()
+        status, _headers, body = _call_wsgi(
+            app,
+            method="GET",
+            path="/analyze?scenario=nominal&session_id=saved-session-001",
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertIn("Persisted-session scientific review", body)
+        self.assertIn("Processing Controls", body)
+        self.assertIn("Analysis Controls", body)
+        self.assertIn("Visible Next Backend Steps", body)
+
     def test_wsgi_start_flow_updates_run_route(self) -> None:
         app = self._create_app()
         status, headers, _body = _call_wsgi(
@@ -157,7 +196,16 @@ class Phase3BUiFoundationTests(unittest.TestCase):
         status, _headers, body = _call_wsgi(app, method="GET", path="/run?scenario=nominal")
         self.assertEqual(status, "200 OK")
         self.assertIn("Primary HF2 Live Data", body)
-        self.assertIn("Pico Monitor Shell", body)
+        self.assertIn("Pico Monitor Context", body)
+
+    def test_active_docs_point_to_operator_ui_mvp(self) -> None:
+        repo_root = Path(ROOT)
+        ui_foundation = (repo_root / "docs" / "ui_foundation.md").read_text(encoding="utf-8")
+        operator_ui_mvp = (repo_root / "docs" / "operator_ui_mvp.md").read_text(encoding="utf-8")
+
+        self.assertIn("default operator experience centers on one `Operate` workflow", ui_foundation)
+        self.assertIn("This is enough for a valid starting interface.", operator_ui_mvp)
+        self.assertFalse((repo_root / "docs" / "phase3a_ui_foundation.md").exists())
 
     def test_ui_shell_avoids_direct_driver_and_persistence_imports(self) -> None:
         ui_root = Path(ROOT) / "ui-shell" / "src" / "ircp_ui_shell"

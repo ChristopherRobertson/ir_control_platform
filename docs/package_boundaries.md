@@ -1,23 +1,32 @@
 # Package Boundaries
 
-This document records the approved package direction for the supported v1 experiment model. The completed Phase 2 and Phase 3A work proved the initial architecture with a MIRcat + HF2LI-only slice, but active UI guidance now lives in `docs/ui_foundation.md`, not in the completed phase document. The canonical v1 model now also includes T660-2 and T660-1 timing semantics, Nd:YAG timing control mediated by T660-2, Arduino-controlled MUX routing, and PicoScope as a secondary recorded source. The ownership rules remain intentionally strict so later driver, engine, data, and UI work can land without re-litigating authority.
+## Purpose
+This document records the approved package direction for the supported v1 experiment model and the current operator-first UI plan.
 
-## UI-first sequencing rule
+Use it to keep execution order from collapsing ownership.
+The next implementation pass is UI-first from a sequencing perspective, not from an ownership perspective.
 
-The remaining work is presentation-first from a sequencing perspective, not from an ownership perspective.
-
-- Complete Setup, Advanced, Calibrated, Run, Results, Analyze, and Service / Maintenance as the user-facing workflow surfaces first.
-- Use those surfaces to determine which metadata, commands, visualizations, and persisted outputs are actually required.
-- Do not use that sequencing rule to move truth into `ui-shell`.
-
+## Fixed Ownership
 Authority remains unchanged:
+- `experiment-engine` owns orchestration, validation, commands, and authoritative run state
+- `data-pipeline` owns sessions, artifacts, replay, and provenance
+- `processing` owns deterministic transforms
+- `analysis` owns deterministic interpretation
+- `reports` owns export generation
+- `ui-shell` consumes typed control-plane and data-plane boundaries
 
-- `experiment-engine` still owns orchestration and authoritative run state
-- `data-pipeline` still owns sessions, artifacts, replay, and provenance
-- `processing` and `analysis` still own deterministic transforms and interpretation outside the UI
-- `ui-shell` still consumes typed control-plane and data-plane boundaries
+The default `Operate` workflow does not change those boundaries.
 
-## Approved dependency direction
+## Current Execution Rule
+Build the operator-first UI MVP first, then deepen secondary surfaces and backend wiring in response to that reviewed UI.
+
+That means:
+- make the default `Operate` workflow clear first
+- use `Results`, `Advanced`, and `Service / Maintenance` as secondary surfaces
+- keep `Analyze` secondary until persisted-session review is useful
+- do not use the UI sequencing rule to move truth into `ui-shell`
+
+## Approved Dependency Direction
 
 ```mermaid
 flowchart LR
@@ -57,51 +66,59 @@ flowchart LR
   E2E --> UIShell
 ```
 
-## Package roles
+## Package Roles
 
 | Package | Owns | Must not own |
 |---|---|---|
 | `contracts` | Canonical shared types, recipe shape, run state, session manifest, and artifact provenance | Device I/O, orchestration, persistence implementation, UI behavior |
 | `platform` | Generic event and error primitives | Device-specific logic or workflow decisions |
 | `drivers` | One typed adapter contract per device family | Multi-device coordination, persistence, UI state |
-| `experiment-engine` | Preflight, coordinated start/abort flow, run state, device fault projection | Raw file writes, analysis, view logic |
-| `data-pipeline` | Session creation, event persistence, artifact registration, reopen/replay | Driver logic, presentation logic |
+| `experiment-engine` | Preflight, coordinated start and abort flow, run state, device fault projection | Raw file writes, analysis, view logic |
+| `data-pipeline` | Session creation, event persistence, artifact registration, reopen and replay | Driver logic, presentation logic |
 | `processing` | Deterministic raw-to-processed jobs | Session truth or UI state |
 | `analysis` | Deterministic processed-to-analysis jobs | Session truth or UI state |
 | `reports` | Export generation from persisted artifacts | Live orchestration or screen-scrape output |
-| `ui-shell` | Presentation-facing commands and queries only | Direct driver imports, persistence, processing, analysis authority |
+| `ui-shell` | Presentation-facing commands and queries only | Direct driver imports, persistence, processing, or analysis authority |
 | `simulators` | Deterministic simulator bundles and scenario catalogs | Production shortcuts |
 | `e2e` | Scenario-level verification | Product runtime ownership |
 
-## Boundary clarifications for the expanded v1 slice
+## Operate Workflow Boundary Mapping
+For the next UI pass:
+- `ui-shell` renders session and sample identity, laser controls, HF2LI acquisition controls, run control, live status, and recent warnings.
+- `experiment-engine` owns preflight, coordinated start and abort, timing relationships, and authoritative run state.
+- `data-pipeline` owns save and reopen behavior, session manifests, artifact registration, and recent-session summaries.
+- `processing`, `analysis`, and `reports` remain outside the default operator path until persisted-session review needs them.
 
+Expanded v1 clarifications remain intact:
 - `experiment-engine` owns the neutral T0-based timing model and translates pump-shot count, probe mode, acquisition timing mode, and selected digital references into one coordinated execution path.
-- `drivers` own device-specific programming for T660-2, T660-1, PicoScope, and the Arduino-controlled MUX; they do not decide experiment timing relationships.
-- `data-pipeline` remains the owner of persisted HF2LI primary raw artifacts and any secondary PicoScope monitor artifacts.
-- `ui-shell` presents timing, MUX, PicoScope, and session-review choices through Setup, Advanced, Calibrated, Run, Results, Analyze, and Service surfaces, not as separate device-first consoles.
-- saved settings metadata and raw outputs become visible through the workflow surfaces by reading authoritative control-plane and data-plane state rather than inventing UI-local truth
+- `drivers` own device-specific programming for T660-2, T660-1, PicoScope, and the Arduino-controlled MUX. They do not decide experiment timing relationships.
+- `data-pipeline` owns persisted HF2LI primary raw artifacts and any secondary PicoScope monitor artifacts.
+- saved settings metadata, raw outputs, and provenance become visible in the UI by reading authoritative control-plane and data-plane state, not by inventing UI-local truth.
 
-## Canonical v1 command flow
+## Allowed Support Moves During The UI MVP Pass
+These are acceptable:
+- thin view-model adapters that reshape authoritative state for server-rendered pages
+- minimal read-only storage and session-inspection helpers
+- fixture-backed or simulator-backed summaries used to make `Operate` and `Results` reviewable
 
-1. `ui-shell` requests `run_preflight()` through a control-plane client.
-2. `experiment-engine` evaluates `ExperimentRecipe` plus current `drivers` status and returns a `PreflightReport`.
-3. `experiment-engine` requests session creation through `data-pipeline` before the run is considered live.
-4. `experiment-engine` applies one coordinated configuration spanning T660-2 master timing, T660-1 slave timing, Nd:YAG timing semantics, MIRcat probe operation, HF2LI primary acquisition, and optional MUX plus PicoScope secondary recording.
-5. `data-pipeline` records session updates, raw artifacts, optional secondary monitor artifacts, and run events continuously enough that a faulted run can still be reopened.
+These are still not acceptable:
+- UI-authored run orchestration
+- UI-authored persistence truth
+- speculative backend implementation added only to populate screens
+- duplicated workflow paths split between “real” and “temporary” logic
+
+## Canonical Operate Command Flow
+1. `ui-shell` requests session lookup, preflight, or run actions through typed boundaries.
+2. `experiment-engine` evaluates the recipe plus current device status and returns readiness or run-state updates.
+3. `experiment-engine` requests session creation through `data-pipeline` before a run becomes live.
+4. `experiment-engine` applies one coordinated configuration spanning timing, probe operation, HF2LI acquisition, and any optional routing or secondary capture.
+5. `data-pipeline` records session updates, raw artifacts, and run events continuously enough that a faulted run can still be reopened.
 6. `processing`, `analysis`, and `reports` operate only on persisted artifacts and session manifests.
 
-## Explicit bans
-
+## Explicit Bans
 - No runtime imports or file reads from the legacy migration reference repository.
 - No direct `ui-shell` imports of `drivers`, `data-pipeline`, `processing`, or `analysis` implementation packages.
 - No startup auto-connect behavior.
 - No raw node passthrough surface for HF2LI in the product contract.
 - No fallback or alternate sweep path for MIRcat in the canonical design.
 - No device-first timing console that bypasses the experiment engine's T0 model.
-
-## Phase 2 contract choices
-
-- `ExperimentRecipe` must expand beyond the MIRcat + HF2LI foundation to include T0-based timing, pump/probe/acquisition relationships, MUX selection, optional PicoScope secondary capture, and time-to-wavenumber mapping context.
-- `DeviceConfiguration` is the normalized applied snapshot; driver command methods consume typed recipe sections and return normalized snapshots.
-- `SessionManifest` is authoritative and versioned from creation onward, even if the run later faults or aborts.
-- Raw, processed, analysis, and export artifacts are separate contract types with explicit provenance links; HF2LI remains the primary scientific raw-data source and PicoScope remains a secondary recorded monitor source.
