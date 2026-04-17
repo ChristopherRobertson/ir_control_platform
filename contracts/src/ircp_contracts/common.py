@@ -1,11 +1,11 @@
-"""Shared enums and scalar aliases for Phase 3B contracts."""
+"""Shared enums and scalar aliases for supported-v1 contracts."""
 
 from __future__ import annotations
 
 from enum import Enum
 from typing import Union
 
-CONTRACT_VERSION = "phase3b.v1"
+CONTRACT_VERSION = "supported-v1"
 ConfigurationScalar = Union[bool, int, float, str]
 
 

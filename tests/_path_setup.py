@@ -1,4 +1,4 @@
-"""Local test helper for importing Phase 2 package scaffolding."""
+"""Local test helper for importing repository packages."""
 
 from __future__ import annotations
 

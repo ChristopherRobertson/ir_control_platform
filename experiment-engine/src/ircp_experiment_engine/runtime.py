@@ -1,4 +1,4 @@
-"""Concrete Phase 3B simulator-backed orchestration services."""
+"""Concrete supported-v1 simulator-backed orchestration services."""
 
 from __future__ import annotations
 
@@ -292,7 +292,7 @@ class SupportedV1PreflightValidator(PreflightValidator):
 
 
 class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
-    """Single-path simulator-backed run authority for Phase 3B."""
+    """Single-path simulator-backed run authority for supported-v1."""
 
     def __init__(
         self,
@@ -367,8 +367,8 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                 run_id=f"{manifest.session_id}-bootstrap",
                 event_type=RunEventType.SESSION_CREATED,
                 emitted_at=created_at,
-                source="experiment-engine",
-                message="Authoritative session record created before the run became live.",
+                source="session",
+                message="Session opened.",
                 phase=RunPhase.STARTING,
                 session_id=manifest.session_id,
                 timing_summary=timing_summary,
@@ -382,8 +382,8 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                 run_id=f"{manifest.session_id}-bootstrap",
                 event_type=RunEventType.DEVICE_CONFIGURATION_APPLIED,
                 emitted_at=created_at,
-                source="experiment-engine",
-                message="Supported-v1 timing, probe, primary acquisition, routing, and optional secondary capture settings were applied.",
+                source="experiment",
+                message="MIRcat and HF2LI settings staged.",
                 phase=RunPhase.STARTING,
                 session_id=manifest.session_id,
                 timing_summary=timing_summary,
@@ -617,8 +617,8 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             run_id=run_id,
             event_type=RunEventType.RUN_ABORTED,
             emitted_at=aborted.updated_at,
-            source="experiment-engine",
-            message="The supported-v1 run was aborted explicitly before a completed outcome.",
+            source="experiment",
+            message="Experiment aborted.",
             phase=RunPhase.ABORTED,
             session_id=previous.session_id,
             device_fault=previous.latest_fault,

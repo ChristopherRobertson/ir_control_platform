@@ -33,7 +33,7 @@ The product must remain:
 ## Product Goal
 The next visible product milestone is a usable, reviewable, intuitive starting interface for operators.
 
-That interface must center on one default `Operate` workflow, even if internal routes still use `setup` and `run` naming.
+That interface must center on one default `Experiment` page for the minimal fixed-wavelength baseline workflow.
 
 The default workflow should answer:
 1. What session am I working in?
@@ -77,7 +77,7 @@ The next implementation pass is:
 
 ## End-State Product Areas
 The finished product should read as:
-- `Operate` for normal operation
+- `Experiment` for normal operation
 - `Results` for persisted session review
 - `Analyze` for persisted-session scientific review
 - `Advanced` for expert timing, routing, and calibration tuning

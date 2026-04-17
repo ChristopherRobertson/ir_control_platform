@@ -15,6 +15,7 @@ from .models import (
     FormFieldModel,
     HeaderStatus,
     NavigationItem,
+    OperateDisclosureModel,
     OperatePageModel,
     OperatePanelModel,
     ResultsPageModel,
@@ -164,6 +165,25 @@ main {
   box-shadow: var(--shadow);
 }
 
+.panel-header-row {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.panel-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.panel-header-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .panel.state-accent {
   border-color: rgba(15, 118, 110, 0.24);
 }
@@ -195,6 +215,10 @@ main {
 }
 
 .action-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
   align-items: center;
 }
 
@@ -231,6 +255,28 @@ button:disabled, .button-link.disabled {
 .field-grid {
   display: grid;
   gap: 12px;
+}
+
+.field-grid.two-column {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.field-grid.three-column {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field-group-heading {
+  grid-column: 1 / -1;
+  padding-top: 8px;
+}
+
+.field-group-heading:first-child {
+  padding-top: 0;
+}
+
+.field-group-heading strong {
+  display: block;
+  margin-bottom: 4px;
 }
 
 .status-grid {
@@ -271,9 +317,25 @@ button:disabled, .button-link.disabled {
   gap: 6px;
 }
 
+.field.full-width {
+  grid-column: 1 / -1;
+}
+
+.field.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  align-self: end;
+  padding-bottom: 10px;
+}
+
 .field label {
   font-weight: 600;
   color: #24303a;
+}
+
+.field.checkbox-field label {
+  margin: 0;
 }
 
 .field input,
@@ -286,6 +348,32 @@ button:disabled, .button-link.disabled {
   font: inherit;
   color: var(--ink);
   background: rgba(255, 255, 255, 0.92);
+}
+
+.field.checkbox-field input {
+  width: auto;
+  margin: 0;
+}
+
+.field input:disabled,
+.field select:disabled,
+.field textarea:disabled {
+  background: #e5e7eb;
+  border-color: #d0d5dd;
+  color: #7a8793;
+  cursor: not-allowed;
+}
+
+.field input[readonly],
+.field textarea[readonly] {
+  background: #f3f4f6;
+  border-color: #d0d5dd;
+}
+
+.field input:invalid,
+.field textarea:invalid,
+.field select:invalid {
+  border-color: #b91c1c;
 }
 
 .field textarea {
@@ -351,6 +439,285 @@ details > summary::-webkit-details-marker { display: none; }
 }
 """
 
+APP_SHELL_SCRIPT = """
+<script>
+(() => {
+  const pulseFieldNames = [
+    "pulse_repetition_rate_hz",
+    "pulse_width_ns",
+    "pulse_duty_cycle_percent",
+  ];
+  const operatingModeFieldNames = [
+    "emission_mode",
+    "pulse_repetition_rate_hz",
+    "pulse_width_ns",
+  ];
+  const pulseRepetitionRateMinHz = 10;
+  const pulseRepetitionRateMaxHz = 3000000;
+  const pulseWidthMinNs = 20;
+  const pulseWidthMaxNs = 1005;
+  const pulseDutyCycleMaxPercent = 30;
+  const guardedLaserActions = new Set([
+    "/experiment/laser/arm",
+    "/experiment/laser/tune",
+    "/experiment/laser/emission/on",
+    "/experiment/laser/scan/start",
+  ]);
+
+  function calculateDutyCyclePercent(rateHz, pulseWidthNs) {
+    if (!Number.isFinite(rateHz) || !Number.isFinite(pulseWidthNs) || rateHz <= 0 || pulseWidthNs <= 0) {
+      return 0;
+    }
+    return rateHz * pulseWidthNs * 1e-7;
+  }
+
+  function maxPulseWidthNs(rateHz) {
+    if (!Number.isFinite(rateHz) || rateHz <= 0) {
+      return pulseWidthMaxNs;
+    }
+    return (pulseDutyCycleMaxPercent / 100) / (rateHz * 1e-9);
+  }
+
+  function syncOperatingModeActionButtons(form) {
+    const emissionMode = form.querySelector('select[name="emission_mode"]');
+    if (!emissionMode) {
+      return;
+    }
+    const formValid = form.checkValidity();
+    for (const button of form.querySelectorAll('button[formaction]')) {
+      if (!(button instanceof HTMLButtonElement)) {
+        continue;
+      }
+      if (button.dataset.serverDisabled == null) {
+        button.dataset.serverDisabled = button.disabled ? "true" : "false";
+      }
+      const action = button.getAttribute("formaction") || "";
+      if (!guardedLaserActions.has(action)) {
+        continue;
+      }
+      button.disabled = button.dataset.serverDisabled === "true" || !formValid;
+    }
+  }
+
+  function collectAsyncFormState(excludedForm) {
+    const values = new Map();
+    for (const form of document.querySelectorAll('form[data-async-form="true"]')) {
+      if (form === excludedForm) {
+        continue;
+      }
+      for (const control of form.elements) {
+        if (!(control instanceof HTMLInputElement) &&
+            !(control instanceof HTMLSelectElement) &&
+            !(control instanceof HTMLTextAreaElement)) {
+          continue;
+        }
+        if (!control.name || control.type === "hidden") {
+          continue;
+        }
+        values.set(control.name, {
+          type: control.type,
+          value: control.value,
+          checked: control instanceof HTMLInputElement ? control.checked : false,
+        });
+      }
+    }
+    return values;
+  }
+
+  function restoreAsyncFormState(values) {
+    for (const [name, state] of values.entries()) {
+      const selector = `[name="${CSS.escape(name)}"]`;
+      const controls = document.querySelectorAll(selector);
+      for (const control of controls) {
+        if (control instanceof HTMLInputElement) {
+          if (control.type === "checkbox") {
+            control.checked = Boolean(state.checked);
+          } else {
+            control.value = state.value;
+          }
+        } else if (control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement) {
+          control.value = state.value;
+        }
+      }
+    }
+  }
+
+  function syncOperatingModeFields(root = document) {
+    const forms =
+      root instanceof HTMLFormElement
+        ? [root]
+        : Array.from(root.querySelectorAll('form[data-async-form="true"]'));
+    for (const form of forms) {
+      const emissionMode = form.querySelector('select[name="emission_mode"]');
+      if (!emissionMode) {
+        continue;
+      }
+      const repetitionRateInput = form.querySelector('input[name="pulse_repetition_rate_hz"]');
+      const pulseWidthInput = form.querySelector('input[name="pulse_width_ns"]');
+      const dutyCycleInput = form.querySelector('input[name="pulse_duty_cycle_percent"]');
+      const pulsed = emissionMode.value === "pulsed";
+        for (const fieldName of pulseFieldNames) {
+          const wrapper = form.querySelector(`[data-field-name="${fieldName}"]`);
+          const input = form.querySelector(`[name="${fieldName}"]`);
+          if (!wrapper || !input) {
+            continue;
+          }
+          wrapper.hidden = !pulsed;
+          input.disabled = !pulsed;
+        }
+      if (!(repetitionRateInput instanceof HTMLInputElement) ||
+          !(pulseWidthInput instanceof HTMLInputElement) ||
+          !(dutyCycleInput instanceof HTMLInputElement)) {
+        continue;
+      }
+      const repetitionRateHz = Number.parseFloat(repetitionRateInput.value);
+      const pulseWidthNs = Number.parseFloat(pulseWidthInput.value);
+      const allowedPulseWidthMaxNs = Math.min(pulseWidthMaxNs, maxPulseWidthNs(repetitionRateHz));
+      repetitionRateInput.min = String(pulseRepetitionRateMinHz);
+      repetitionRateInput.max = String(pulseRepetitionRateMaxHz);
+      pulseWidthInput.min = String(pulseWidthMinNs);
+      pulseWidthInput.max = String(Math.max(pulseWidthMinNs, Math.floor(allowedPulseWidthMaxNs)));
+      const dutyCyclePercent = calculateDutyCyclePercent(repetitionRateHz, pulseWidthNs);
+      dutyCycleInput.value = dutyCyclePercent.toFixed(3);
+      const dutyCycleMessage =
+        dutyCyclePercent > pulseDutyCycleMaxPercent
+          ? `Duty cycle must be ${pulseDutyCycleMaxPercent}% or less.`
+          : "";
+      repetitionRateInput.setCustomValidity(dutyCycleMessage);
+      pulseWidthInput.setCustomValidity(dutyCycleMessage);
+      dutyCycleInput.setCustomValidity(dutyCycleMessage);
+      if (!pulsed) {
+        repetitionRateInput.setCustomValidity("");
+        pulseWidthInput.setCustomValidity("");
+        dutyCycleInput.setCustomValidity("");
+      }
+      syncOperatingModeActionButtons(form);
+    }
+  }
+
+  function restoreFocus(name) {
+    if (!name) {
+      return;
+    }
+    const selector = `[name="${CSS.escape(name)}"]`;
+    const replacement = document.querySelector(selector);
+    if (!(replacement instanceof HTMLElement)) {
+      return;
+    }
+    replacement.focus();
+    if (replacement instanceof HTMLInputElement || replacement instanceof HTMLTextAreaElement) {
+      replacement.selectionStart = replacement.value.length;
+      replacement.selectionEnd = replacement.value.length;
+    }
+  }
+
+  function swapShellFromHtml(markup) {
+    const parser = new DOMParser();
+    const nextDocument = parser.parseFromString(markup, "text/html");
+    const nextHeader = nextDocument.querySelector(".shell-header");
+    const nextMain = nextDocument.querySelector("main");
+    const currentHeader = document.querySelector(".shell-header");
+    const currentMain = document.querySelector("main");
+    if (!nextHeader || !nextMain || !currentHeader || !currentMain) {
+      throw new Error("Unable to refresh Experiment page shell.");
+    }
+    currentHeader.outerHTML = nextHeader.outerHTML;
+    currentMain.outerHTML = nextMain.outerHTML;
+    if (nextDocument.title) {
+      document.title = nextDocument.title;
+    }
+    syncOperatingModeFields(document);
+  }
+
+  async function submitAsyncForm(form, submitter) {
+    if (!form.reportValidity()) {
+      syncOperatingModeFields(form);
+      return;
+    }
+    if (form.dataset.submitting === "true") {
+      return;
+    }
+    form.dataset.submitting = "true";
+    const preservedValues = collectAsyncFormState(form);
+      const activeName =
+        document.activeElement instanceof HTMLElement && "name" in document.activeElement
+          ? document.activeElement.getAttribute("name")
+        : null;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    try {
+      const action = submitter?.formAction || form.action || window.location.href;
+      const method = (submitter?.formMethod || form.method || "post").toUpperCase();
+      const formData = new FormData(form);
+      const body = new URLSearchParams();
+      for (const [key, value] of formData.entries()) {
+        body.append(key, String(value));
+      }
+      const response = await fetch(action, {
+        method,
+        body,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "IRCPUiShell",
+        },
+        redirect: "follow",
+      });
+      const markup = await response.text();
+      swapShellFromHtml(markup);
+      restoreAsyncFormState(preservedValues);
+      syncOperatingModeFields(document);
+      history.replaceState({}, "", response.url);
+      window.scrollTo(scrollX, scrollY);
+      restoreFocus(activeName);
+    } finally {
+      form.dataset.submitting = "false";
+    }
+  }
+
+  document.addEventListener("submit", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLFormElement) || target.dataset.asyncForm !== "true") {
+      return;
+    }
+    event.preventDefault();
+    submitAsyncForm(target, event.submitter instanceof HTMLElement ? event.submitter : null);
+  });
+
+  document.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
+      return;
+    }
+    if (!operatingModeFieldNames.includes(target.name)) {
+      return;
+    }
+    const form = target.closest('form[data-async-form="true"]');
+    if (!(form instanceof HTMLFormElement)) {
+      return;
+    }
+    syncOperatingModeFields(form);
+  });
+
+  document.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
+      return;
+    }
+    if (!operatingModeFieldNames.includes(target.name)) {
+      return;
+    }
+    const form = target.closest('form[data-async-form="true"]');
+    if (!(form instanceof HTMLFormElement)) {
+      return;
+    }
+    syncOperatingModeFields(form);
+  });
+
+  syncOperatingModeFields(document);
+})();
+</script>
+"""
+
 
 def render_layout(header: HeaderStatus, body: str) -> str:
     return f"""<!doctype html>
@@ -364,6 +731,7 @@ def render_layout(header: HeaderStatus, body: str) -> str:
   <body>
     {render_header(header)}
     <main>{body}</main>
+    {APP_SHELL_SCRIPT}
   </body>
 </html>"""
 
@@ -372,7 +740,7 @@ def render_header(header: HeaderStatus) -> str:
     scenarios = "".join(
         (
             f'<a class="scenario-chip{" active" if option.active else ""}" '
-            f'href="/operate?scenario={escape(option.scenario_id)}">{escape(option.label)}</a>'
+            f'href="/experiment?scenario={escape(option.scenario_id)}">{escape(option.label)}</a>'
         )
         for option in header.scenario_options
     )
@@ -384,13 +752,17 @@ def render_header(header: HeaderStatus) -> str:
         for item in header.navigation
     )
     badges = "".join(render_badge(badge) for badge in header.badges)
+    summary = f"<div>{escape(header.summary)}</div>" if header.summary else ""
+    scenario_row = f'<div class="scenario-row">{scenarios}</div>' if scenarios else ""
+    nav_row = f'<div class="nav-row">{navigation}</div>' if navigation else ""
+    badge_row = f'<div class="badge-row">{badges}</div>' if badges else ""
     return f"""
     <header class="shell-header">
       <h1>{escape(header.title)}</h1>
-      <div>{escape(header.summary)}</div>
-      <div class="scenario-row">{scenarios}</div>
-      <div class="nav-row">{navigation}</div>
-      <div class="badge-row">{badges}</div>
+      {summary}
+      {scenario_row}
+      {nav_row}
+      {badge_row}
     </header>"""
 
 
@@ -428,61 +800,77 @@ def render_callout(callout: CalloutModel) -> str:
 
 
 def render_operate_page(page: OperatePageModel, scenario_id: str) -> str:
-    live_status = "".join(render_status_item(item) for item in page.live_status)
-    activity = "".join(render_event_row(item) for item in page.recent_activity) or (
-        '<div class="placeholder-copy">No recent activity yet.</div>'
-    )
     return f"""
     <div class="page-stack">
-      <section class="hero">
-        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
-        <h2>{escape(page.title)}</h2>
-        <p class="hero-subtitle">{escape(page.subtitle)}</p>
-        {render_page_state(page.state)}
-      </section>
-      {render_callouts(page.callouts)}
+      {render_page_state(page.state)}
+      {render_operate_panel(page.session_panel, scenario_id)}
+      {render_operate_panel(page.laser_panel, scenario_id)}
       <section class="panel-grid">
-        {render_operate_panel(page.session_panel, scenario_id)}
-        {render_operate_panel(page.laser_panel, scenario_id)}
+        {render_operate_panel(page.ndyag_panel, scenario_id)}
         {render_operate_panel(page.acquisition_panel, scenario_id)}
-        {render_operate_panel(page.run_panel, scenario_id)}
       </section>
-      <section class="panel-grid">
-        <div class="panel state-accent">
-          <h3>Live Status</h3>
-          <p class="panel-subtitle">What the system is doing right now, without the diagnostic overload.</p>
-          <div class="status-grid">{live_status}</div>
-        </div>
-        <div class="panel">
-          <h3>Recent Activity</h3>
-          <p class="panel-subtitle">Compact events, warnings, and action feedback for the current operator pass.</p>
-          {activity}
-        </div>
-      </section>
+      {render_operate_panel(page.run_panel, scenario_id)}
     </div>"""
 
 
 def render_operate_panel(panel: OperatePanelModel, scenario_id: str) -> str:
-    fields = "".join(render_form_field(field) for field in panel.fields)
+    fields = "".join(render_form_field(field) for field in (*panel.fields, *panel.conditional_fields))
+    disclosures = "".join(render_operate_disclosure(disclosure) for disclosure in panel.disclosures)
+    header_actions = "".join(render_action_button(button, scenario_id) for button in panel.header_actions)
     actions = "".join(render_action_button(button, scenario_id) for button in panel.actions)
-    status_items = "".join(render_status_item(item) for item in panel.status_items) or (
-        '<div class="placeholder-copy">No status is available for this section yet.</div>'
-    )
+    status_items = "".join(render_status_item(item) for item in panel.status_items)
+    actions_markup = f'<div class="action-row">{actions}</div>' if actions else ""
+    status_markup = f'<div class="status-grid">{status_items}</div>' if status_items else ""
+    footer_callouts = render_callouts(panel.footer_callouts)
     notes = "".join(f"<li>{escape(note)}</li>" for note in panel.notes)
     notes_markup = f'<ul class="notes-list">{notes}</ul>' if notes else ""
+    if panel.field_columns == 3:
+        field_grid_class = "field-grid three-column"
+    elif panel.field_columns == 2:
+        field_grid_class = "field-grid two-column"
+    else:
+        field_grid_class = "field-grid"
+    form_action = f' action="{escape(panel.form_action)}"' if panel.form_action else ""
     return f"""
     <section class="panel state-accent">
-      <h3>{escape(panel.title)}</h3>
-      <p class="panel-subtitle">{escape(panel.subtitle)}</p>
-      {render_page_state(panel.state)}
-      <form method="post">
+      <form method="post"{form_action} data-async-form="true">
+        <div class="panel-header-row">
+          <div class="panel-heading">
+            <h3>{escape(panel.title)}</h3>
+          </div>
+          <div class="panel-header-actions">{header_actions}</div>
+        </div>
+        {render_page_state(panel.state)}
         <input type="hidden" name="scenario" value="{escape(scenario_id)}">
-        <div class="field-grid">{fields}</div>
-        <div class="action-row">{actions}</div>
+        <div class="{field_grid_class}">{fields}</div>
+        {disclosures}
+        {actions_markup}
       </form>
-      <div class="status-grid">{status_items}</div>
+      {status_markup}
       {notes_markup}
+      {footer_callouts}
     </section>"""
+
+
+def render_operate_disclosure(disclosure: OperateDisclosureModel) -> str:
+    if disclosure.field_columns == 3:
+        field_grid_class = "field-grid three-column"
+    elif disclosure.field_columns == 2:
+        field_grid_class = "field-grid two-column"
+    else:
+        field_grid_class = "field-grid"
+    fields = "".join(render_form_field(field) for field in disclosure.fields)
+    notes = "".join(f"<li>{escape(note)}</li>" for note in disclosure.notes)
+    notes_markup = f'<ul class="notes-list">{notes}</ul>' if notes else ""
+    open_attr = " open" if disclosure.open_by_default else ""
+    subtitle = f'<p class="panel-subtitle">{escape(disclosure.subtitle)}</p>' if disclosure.subtitle else ""
+    return f"""
+    <details class="accordion"{open_attr}>
+      <summary>{escape(disclosure.title)}</summary>
+      {subtitle}
+      <div class="{field_grid_class}">{fields}</div>
+      {notes_markup}
+    </details>"""
 
 
 def render_action_button(button: ActionButtonModel, scenario_id: str) -> str:
@@ -511,30 +899,58 @@ def render_status_item(item: StatusItemModel) -> str:
 
 
 def render_form_field(field: FormFieldModel) -> str:
+    if field.field_type == "group_heading":
+        help_markup = f'<div class="field-help">{escape(field.help_text)}</div>' if field.help_text else ""
+        return (
+            f'<div class="field-group-heading"><strong>{escape(field.label)}</strong>{help_markup}</div>'
+        )
     if field.field_type == "select":
         options = "".join(
             f'<option value="{escape(option.value)}" {"selected" if option.selected else ""}>{escape(option.label)}</option>'
             for option in field.options
         )
+        label = f'{escape(field.section_label)} / {escape(field.label)}' if field.section_label else escape(field.label)
+        auto_submit = ' onchange="this.form.requestSubmit()"' if field.auto_submit and not field.disabled else ""
         control = (
-            f'<label for="{escape(field.name)}">{escape(field.label)}</label>'
-            f'<select id="{escape(field.name)}" name="{escape(field.name)}" {"disabled" if field.disabled else ""}>{options}</select>'
+            f'<label for="{escape(field.name)}">{label}</label>'
+            f'<select id="{escape(field.name)}" name="{escape(field.name)}" {"disabled" if field.disabled else ""}{auto_submit}>{options}</select>'
         )
     elif field.field_type == "textarea":
+        label = f'{escape(field.section_label)} / {escape(field.label)}' if field.section_label else escape(field.label)
+        auto_submit = ' onchange="this.form.requestSubmit()"' if field.auto_submit and not field.disabled else ""
+        read_only = " readonly" if field.read_only else ""
+        control = (
+            f'<label for="{escape(field.name)}">{label}</label>'
+            f'<textarea id="{escape(field.name)}" name="{escape(field.name)}" placeholder="{escape(field.placeholder)}" '
+            f'{"disabled" if field.disabled else ""}{read_only}{auto_submit}>{escape(field.value)}</textarea>'
+        )
+    elif field.field_type == "checkbox":
+        auto_submit = ' onchange="this.form.requestSubmit()"' if field.auto_submit and not field.disabled else ""
         control = (
             f'<label for="{escape(field.name)}">{escape(field.label)}</label>'
-            f'<textarea id="{escape(field.name)}" name="{escape(field.name)}" placeholder="{escape(field.placeholder)}" '
-            f'{"disabled" if field.disabled else ""}>{escape(field.value)}</textarea>'
+            f'<input id="{escape(field.name)}" name="{escape(field.name)}" type="checkbox" value="1" '
+            f'{"checked" if field.checked else ""} {"disabled" if field.disabled else ""}{auto_submit}>'
         )
     else:
         field_type = "number" if field.field_type == "number" else "text"
+        label = f'{escape(field.section_label)} / {escape(field.label)}' if field.section_label else escape(field.label)
+        auto_submit = ' onchange="this.form.requestSubmit()"' if field.auto_submit and not field.disabled else ""
+        read_only = " readonly" if field.read_only else ""
+        min_attr = f' min="{escape(field.min_value)}"' if field.min_value else ""
+        max_attr = f' max="{escape(field.max_value)}"' if field.max_value else ""
+        step_attr = f' step="{escape(field.step)}"' if field.step else ""
         control = (
-            f'<label for="{escape(field.name)}">{escape(field.label)}</label>'
+            f'<label for="{escape(field.name)}">{label}</label>'
             f'<input id="{escape(field.name)}" name="{escape(field.name)}" type="{field_type}" value="{escape(field.value)}" '
-            f'placeholder="{escape(field.placeholder)}" {"disabled" if field.disabled else ""}>'
+            f'placeholder="{escape(field.placeholder)}" {"disabled" if field.disabled else ""}{read_only}{min_attr}{max_attr}{step_attr}{auto_submit}>'
         )
     help_markup = f'<div class="field-help">{escape(field.help_text)}</div>' if field.help_text else ""
-    return f'<div class="field">{control}{help_markup}</div>'
+    field_class = "field checkbox-field" if field.field_type == "checkbox" else "field"
+    if field.full_width:
+        field_class += " full-width"
+    hidden_attr = " hidden" if field.hidden else ""
+    data_attr = f' data-field-name="{escape(field.name)}"' if field.name else ""
+    return f'<div class="{field_class}"{data_attr}{hidden_attr}>{control}{help_markup}</div>'
 
 
 def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
@@ -736,7 +1152,7 @@ def render_event_row(item: EventLogItem) -> str:
     <div class="event-row">
       <div><strong>{escape(item.source)}</strong></div>
       <div>{escape(item.message)}</div>
-      <div class="small">{escape(item.timestamp.isoformat())}</div>
+      <div class="small">{escape(item.timestamp.astimezone().strftime("%H:%M:%S"))}</div>
     </div>"""
 
 
@@ -758,10 +1174,10 @@ def render_session_card(card: SessionSummaryCard, scenario_id: str, *, target: s
       <div class="small">Events {card.event_count} | Replay {'ready' if card.replay_ready else 'unavailable'}</div>
       {failure}
       <div class="toolbar-row">
-        <form method="post" action="/operate/session/open">
+        <form method="post" action="/experiment/session/open">
           <input type="hidden" name="scenario" value="{escape(scenario_id)}">
           <input type="hidden" name="session_id" value="{escape(card.session_id)}">
-          <button type="submit" class="secondary">Open in Operate</button>
+          <button type="submit" class="secondary">Open in Experiment</button>
         </form>
         <a class="button-link {'secondary' if target == 'results' else 'ghost'}" href="/results?scenario={escape(scenario_id)}&session_id={escape(card.session_id)}">Open Results</a>
         <a class="button-link ghost" href="{analyze_link}">Analyze</a>

@@ -38,7 +38,7 @@ Future work should extend the existing shell, not replace it.
 This UI must read as a task UI, not an architecture UI.
 The landing experience should make the default path obvious and keep advanced detail out of the way.
 
-The default operator experience centers on one `Operate` workflow.
+The default operator experience centers on one `Experiment` page.
 That workflow should emphasize:
 - session and sample identity
 - laser controls
@@ -66,19 +66,17 @@ The active shell structure in `ui-shell/src/ircp_ui_shell/` remains:
 Future work should extend this structure instead of replacing it with a second UI runtime or a parallel shell.
 
 ## Route And Page Model
-The operator-facing product should lead with `Operate`, even if route names remain split.
+The operator-facing product should lead with `Experiment`.
 
-The current route model may continue to use:
-- `/setup` for session identity, readiness, and routine controls
-- `/run` for active execution state and live status
+The current route model should use:
+- `/experiment` for the minimal baseline workflow
 - `/results` for persisted-session review
 - `/analyze` for persisted-session scientific review
-- `/setup/advanced` for expert tuning
-- `/setup/calibrated` for guarded calibrated assumptions
+- `/advanced` for expert tuning
 - `/service` for diagnostics and maintenance
 
 Internal route spelling may change later. What may not change is the operator-facing framing:
-- `Operate` is the default starting job
+- `Experiment` is the default starting job
 - advanced detail is progressive
 - service work is clearly separate
 - results and later analysis do not dominate the landing experience
@@ -95,7 +93,7 @@ The active foundation should support:
 - live status and live-data shells
 - session and artifact summary cards
 
-Extend these pieces deliberately so the UI stays coherent as `Operate`, `Results`, `Advanced`, and `Service / Maintenance` deepen.
+Extend these pieces deliberately so the UI stays coherent as `Experiment`, `Results`, `Advanced`, and `Service / Maintenance` deepen.
 
 ## UI Quality Rules
 - one screen = one job
@@ -132,7 +130,7 @@ Authority stays where it already belongs:
 
 ## Current Development Order
 The next UI work should proceed in this order:
-1. build the operator-first `Operate` MVP
+1. build the operator-first `Experiment` MVP
 2. deepen `Results` and recent-session review
 3. move expert detail into `Advanced` and `Service / Maintenance`
 4. wire backend actions in UI priority order

@@ -26,7 +26,7 @@ for relative_path in (
     if package_root.exists():
         sys.path.insert(0, str(package_root))
 
-from ircp_platform import create_phase3b_simulator_app  # noqa: E402
+from ircp_platform import create_simulator_app  # noqa: E402
 
 
 def main() -> None:
@@ -41,7 +41,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    app = create_phase3b_simulator_app(storage_root=args.storage_root)
+    app = create_simulator_app(storage_root=args.storage_root)
     with make_server(args.host, args.port, app) as server:
         print(f"Serving IR control platform UI at http://{args.host}:{args.port}")
         if args.storage_root is not None:

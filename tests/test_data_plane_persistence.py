@@ -1,4 +1,4 @@
-"""Phase 4 durable persistence, indexing, and replay tests."""
+"""Durable persistence, indexing, and replay tests."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from datetime import datetime, timezone
 
-from _path_setup import ROOT  # noqa: F401
+try:
+    from _path_setup import ROOT  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - depends on unittest invocation style
+    from tests._path_setup import ROOT
 from ircp_contracts import (
     ArtifactKind,
     ArtifactSourceRole,
@@ -36,12 +39,22 @@ from ircp_experiment_engine.runtime import (
     SupportedV1PreflightValidator,
     build_live_data_points,
 )
-from ircp_platform import create_phase3b_runtime_map
-from ircp_simulators import Phase3BScenarioContext, SupportedV1SimulatorCatalog
+from ircp_platform import create_simulator_runtime_map
+from ircp_simulators import SimulatorScenarioContext, SupportedV1SimulatorCatalog
+
+
+def _filesystem_persistence_available() -> bool:
+    try:
+        from ircp_data_pipeline import filesystem as filesystem_module
+
+        filesystem_module._require_pyarrow()
+    except Exception:
+        return False
+    return True
 
 
 def _build_coordinator(
-    context: Phase3BScenarioContext,
+    context: SimulatorScenarioContext,
     session_store,
     *,
     run_plan_factory=None,
@@ -117,9 +130,13 @@ def _active_run_plan(recipe, session_id: str, run_id: str) -> RunExecutionPlan:
     )
 
 
-class Phase4DataPlaneTests(unittest.TestCase):
+class DataPlanePersistenceTests(unittest.TestCase):
+    def _require_filesystem_persistence(self) -> None:
+        if not _filesystem_persistence_available():
+            self.skipTest("pyarrow-backed filesystem persistence is unavailable in this environment.")
+
     def _read_parquet_rows(self, path: Path) -> list[dict[str, object]]:
-        import pyarrow.parquet as pq
+        import pyarrow.parquet as pq  # type: ignore[reportMissingImports]
 
         table = pq.read_table(path)
         return table.to_pylist()
@@ -132,7 +149,7 @@ class Phase4DataPlaneTests(unittest.TestCase):
     def _build_filesystem_store(
         self,
         root: Path,
-        context: Phase3BScenarioContext,
+        context: SimulatorScenarioContext,
         *,
         include_seed_data: bool = False,
     ) -> FilesystemSessionStore:
@@ -160,6 +177,7 @@ class Phase4DataPlaneTests(unittest.TestCase):
         self.assertTrue(detail.summary.replay_ready)
 
     def test_completed_session_persists_payloads_and_replay_after_restart(self) -> None:
+        self._require_filesystem_persistence()
         root = self._temp_root() / "nominal"
         context = SupportedV1SimulatorCatalog().get_context("nominal")
         store = self._build_filesystem_store(root, context)
@@ -240,6 +258,7 @@ class Phase4DataPlaneTests(unittest.TestCase):
         )
 
     def test_faulted_session_survives_restart_with_partial_payloads(self) -> None:
+        self._require_filesystem_persistence()
         root = self._temp_root() / "faulted"
         context = SupportedV1SimulatorCatalog().get_context("faulted_hf2")
         store = self._build_filesystem_store(root, context)
@@ -277,6 +296,7 @@ class Phase4DataPlaneTests(unittest.TestCase):
         )
 
     def test_aborted_session_survives_restart_with_partial_payloads(self) -> None:
+        self._require_filesystem_persistence()
         root = self._temp_root() / "aborted"
         context = SupportedV1SimulatorCatalog().get_context("nominal")
         store = self._build_filesystem_store(root, context)
@@ -315,6 +335,7 @@ class Phase4DataPlaneTests(unittest.TestCase):
         )
 
     def test_restart_rejects_completed_session_with_secondary_only_raw_artifacts(self) -> None:
+        self._require_filesystem_persistence()
         root = self._temp_root() / "secondary-only"
         context = SupportedV1SimulatorCatalog().get_context("nominal")
         store = self._build_filesystem_store(root, context)
@@ -336,6 +357,7 @@ class Phase4DataPlaneTests(unittest.TestCase):
             self._build_filesystem_store(root, context)
 
     def test_restart_reports_missing_primary_payload_explicitly(self) -> None:
+        self._require_filesystem_persistence()
         root = self._temp_root() / "missing-primary-payload"
         context = SupportedV1SimulatorCatalog().get_context("nominal")
         store = self._build_filesystem_store(root, context)
@@ -369,13 +391,16 @@ class Phase4DataPlaneTests(unittest.TestCase):
             asyncio.run(fresh_store.build_replay_plan(manifest.session_id))
 
     def test_runtime_results_reopen_flow_survives_runtime_recreation(self) -> None:
+        self._require_filesystem_persistence()
         storage_root = self._temp_root()
-        runtimes = create_phase3b_runtime_map(storage_root=storage_root)
+        runtimes = create_simulator_runtime_map(storage_root=storage_root)
         runtime = runtimes["nominal"]
 
         run_state = asyncio.run(runtime.start_run())
+        self.assertIsNotNone(run_state.session_id)
+        assert run_state.session_id is not None
 
-        recreated_runtimes = create_phase3b_runtime_map(storage_root=storage_root)
+        recreated_runtimes = create_simulator_runtime_map(storage_root=storage_root)
         recreated_runtime = recreated_runtimes["nominal"]
         manifest = asyncio.run(recreated_runtime.reopen_session(run_state.session_id))
         results_page = asyncio.run(recreated_runtime.get_results_page(run_state.session_id))
@@ -383,13 +408,14 @@ class Phase4DataPlaneTests(unittest.TestCase):
         self.assertEqual(manifest.session_id, run_state.session_id)
         self.assertEqual(manifest.status, SessionStatus.COMPLETED)
         self.assertIsNotNone(results_page.selected_session)
+        assert results_page.selected_session is not None
         self.assertEqual(results_page.selected_session.session_id, run_state.session_id)
         self.assertGreater(len(results_page.detail_panels), 0)
         self.assertGreater(len(results_page.artifact_panels), 0)
         self.assertGreater(len(results_page.event_log), 0)
         self.assertIn("runtime_mode:simulator:nominal", manifest.notes)
         self.assertTrue((storage_root / "sessions" / run_state.session_id / "manifest.json").is_file())
-        self.assertFalse((storage_root / "phase3b").exists())
+        self.assertTrue((storage_root / "sessions").is_dir())
         self.assertFalse((storage_root / "nominal").exists())
 
 

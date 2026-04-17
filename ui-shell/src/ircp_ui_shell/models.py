@@ -65,6 +65,14 @@ class FormFieldModel:
     placeholder: str = ""
     options: tuple[FormOptionModel, ...] = ()
     checked: bool = False
+    section_label: str = ""
+    full_width: bool = False
+    auto_submit: bool = False
+    hidden: bool = False
+    read_only: bool = False
+    min_value: str = ""
+    max_value: str = ""
+    step: str = ""
 
 
 @dataclass(frozen=True)
@@ -138,27 +146,37 @@ class ActionButtonModel:
 @dataclass(frozen=True)
 class OperatePanelModel:
     title: str
-    subtitle: str
     fields: tuple[FormFieldModel, ...] = ()
+    conditional_fields: tuple[FormFieldModel, ...] = ()
+    field_columns: int = 1
+    form_action: str = ""
+    header_actions: tuple[ActionButtonModel, ...] = ()
     actions: tuple[ActionButtonModel, ...] = ()
     status_items: tuple[StatusItemModel, ...] = ()
+    footer_callouts: tuple[CalloutModel, ...] = ()
     notes: tuple[str, ...] = ()
     state: PageStateModel | None = None
+    disclosures: tuple["OperateDisclosureModel", ...] = ()
+
+
+@dataclass(frozen=True)
+class OperateDisclosureModel:
+    title: str
+    subtitle: str = ""
+    fields: tuple[FormFieldModel, ...] = ()
+    field_columns: int = 1
+    notes: tuple[str, ...] = ()
+    open_by_default: bool = False
 
 
 @dataclass(frozen=True)
 class OperatePageModel:
-    title: str
-    subtitle: str
     state: PageStateModel | None
-    surface_badges: tuple[StatusBadge, ...]
     session_panel: OperatePanelModel
     laser_panel: OperatePanelModel
+    ndyag_panel: OperatePanelModel
     acquisition_panel: OperatePanelModel
     run_panel: OperatePanelModel
-    live_status: tuple[StatusItemModel, ...]
-    recent_activity: tuple[EventLogItem, ...]
-    callouts: tuple[CalloutModel, ...] = ()
 
 
 @dataclass(frozen=True)

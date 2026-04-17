@@ -1,4 +1,4 @@
-"""In-memory session persistence for the Phase 3B simulator workflows."""
+"""In-memory session persistence for the supported-v1 simulator workflows."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def _next_session_counter(manifests: Mapping[str, SessionManifest]) -> int:
 
 
 class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
-    """Authoritative session store for the Phase 3B simulator slice."""
+    """Authoritative session store for the supported-v1 simulator slice."""
 
     def __init__(
         self,

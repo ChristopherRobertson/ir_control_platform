@@ -15,13 +15,13 @@ Authority remains unchanged:
 - `reports` owns export generation
 - `ui-shell` consumes typed control-plane and data-plane boundaries
 
-The default `Operate` workflow does not change those boundaries.
+The default `Experiment` workflow does not change those boundaries.
 
 ## Current Execution Rule
-Build the operator-first UI MVP first, then deepen secondary surfaces and backend wiring in response to that reviewed UI.
+Build the operator-first Experiment MVP first, then deepen secondary surfaces and backend wiring in response to that reviewed UI.
 
 That means:
-- make the default `Operate` workflow clear first
+- make the default `Experiment` workflow clear first
 - use `Results`, `Advanced`, and `Service / Maintenance` as secondary surfaces
 - keep `Analyze` secondary until persisted-session review is useful
 - do not use the UI sequencing rule to move truth into `ui-shell`
@@ -82,7 +82,7 @@ flowchart LR
 | `simulators` | Deterministic simulator bundles and scenario catalogs | Production shortcuts |
 | `e2e` | Scenario-level verification | Product runtime ownership |
 
-## Operate Workflow Boundary Mapping
+## Experiment Workflow Boundary Mapping
 For the next UI pass:
 - `ui-shell` renders session and sample identity, laser controls, HF2LI acquisition controls, run control, live status, and recent warnings.
 - `experiment-engine` owns preflight, coordinated start and abort, timing relationships, and authoritative run state.
@@ -99,7 +99,7 @@ Expanded v1 clarifications remain intact:
 These are acceptable:
 - thin view-model adapters that reshape authoritative state for server-rendered pages
 - minimal read-only storage and session-inspection helpers
-- fixture-backed or simulator-backed summaries used to make `Operate` and `Results` reviewable
+- fixture-backed or simulator-backed summaries used to make `Experiment` and `Results` reviewable
 
 These are still not acceptable:
 - UI-authored run orchestration
@@ -107,7 +107,7 @@ These are still not acceptable:
 - speculative backend implementation added only to populate screens
 - duplicated workflow paths split between “real” and “temporary” logic
 
-## Canonical Operate Command Flow
+## Canonical Experiment Command Flow
 1. `ui-shell` requests session lookup, preflight, or run actions through typed boundaries.
 2. `experiment-engine` evaluates the recipe plus current device status and returns readiness or run-state updates.
 3. `experiment-engine` requests session creation through `data-pipeline` before a run becomes live.

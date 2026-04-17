@@ -7,8 +7,8 @@ Presentation-facing shell, typed UI models, and WSGI app scaffolding for the ope
 - Must not own drivers, persistence, processing, analysis, or export truth.
 
 Current UI framing:
-- the default landing experience centers on one `Operate` workflow
-- internal routes may still split that workflow across `/setup` and `/run`
+- the default landing experience centers on one `Experiment` page
+- compatibility redirects keep `/operate`, `/setup`, and `/run` from leading the user away from the Experiment surface
 - `Results`, `Advanced`, and `Service` are secondary surfaces
 - `Analyze` remains secondary until persisted-session review is useful
 

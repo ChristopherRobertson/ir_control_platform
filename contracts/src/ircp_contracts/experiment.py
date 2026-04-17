@@ -162,6 +162,7 @@ class HF2DemodulatorConfiguration:
     demod_index: int
     sample_rate_hz: float
     harmonic: int = 1
+    time_constant_seconds: float | None = None
     phase_deg: float = 0.0
     enable_transfer: bool = True
 
@@ -172,6 +173,8 @@ class HF2DemodulatorConfiguration:
             raise ValueError("HF2 sample rate must be positive.")
         if self.harmonic < 1:
             raise ValueError("HF2 harmonic must be at least one.")
+        if self.time_constant_seconds is not None and self.time_constant_seconds <= 0:
+            raise ValueError("HF2 time constant must be positive when provided.")
 
 
 @dataclass(frozen=True)

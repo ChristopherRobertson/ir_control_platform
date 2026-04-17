@@ -11,7 +11,7 @@ The current shell is the active Python, server-rendered frontend strategy for th
 - route scaffolding
 - reusable UI components
 - rendering of runtime state, results, and faults
-- the default `Operate` workflow
+- the default `Experiment` workflow
 - secondary `Results`, `Analyze`, `Advanced`, and `Service / Maintenance` surfaces
 
 ## Rules

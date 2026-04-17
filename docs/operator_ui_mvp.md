@@ -16,7 +16,7 @@ This is the active next-pass UI target.
 The next real deliverable is a usable, reviewable, intuitive starting interface.
 
 The UI must become a task UI, not an architecture UI.
-The default operator experience centers on one `Operate` workflow, even if the implementation still uses separate `setup` and `run` routes internally.
+The default operator experience centers on one `Experiment` page for the minimal baseline workflow.
 
 The default page should answer:
 1. What do I do now?
@@ -25,7 +25,7 @@ The default page should answer:
 4. What is the current state of the run?
 5. What needs my attention?
 
-## Default Operate Workflow
+## Default Experiment Workflow
 The normal operator path is:
 1. Identify the session and sample.
 2. Connect and verify the laser and HF2LI.
@@ -51,13 +51,12 @@ The next implementation pass should build a starting operator interface with the
 - arm and disarm
 - emission on and off
 - tune to wavelength or wavenumber
-- start scan
-- stop scan
 - current laser status
 
 ### Lock-in / Acquisition
 - connect and disconnect HF2LI
 - a small set of key acquisition parameters only
+- one operator-facing filter control
 - start acquisition
 - stop acquisition
 - current acquisition status
@@ -104,7 +103,7 @@ Complexity moves out of the default path and into secondary surfaces:
 - persisted-session scientific review
 - comparison and reprocessing work
 
-`Analyze` remains secondary until the default `Operate` flow and basic results review are useful.
+`Analyze` remains secondary until the default `Experiment` flow and basic results review are useful.
 
 ## Layered Development Approach
 

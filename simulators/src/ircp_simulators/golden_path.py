@@ -1,4 +1,4 @@
-"""Deterministic supported-v1 simulator fixtures for Phase 3B."""
+"""Deterministic supported-v1 simulator fixtures."""
 
 from __future__ import annotations
 
@@ -95,66 +95,66 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _format_wavenumber_cm1(value: float | None) -> str:
+    if value is None:
+        return "the selected wavenumber"
+    return f"{value:.2f} cm^-1"
+
+
 def _recipe_defaults(*, pico_mode: PicoMonitoringMode = PicoMonitoringMode.MONITOR_AND_RECORD) -> ExperimentRecipe:
     calibration = CalibrationReference(
-        calibration_id="supported-v1-scan-calibration",
-        version="phase3b.v1",
-        kind="time_to_wavenumber",
-        location="simulators/fixtures/calibration/supported_v1_scan_mapping.json",
+        calibration_id="minimal-baseline-reference",
+        version="supported-v1",
+        kind="reference_context",
+        location="simulators/fixtures/calibration/minimal_baseline_reference.json",
     )
     mapping = TimeToWavenumberMapping(
-        mapping_id="mapping-supported-v1-scan",
+        mapping_id="mapping-minimal-baseline",
         calibration_reference_id=calibration.calibration_id,
-        applicable_spectral_modes=(MircatSpectralMode.SWEEP_SCAN,),
-        start_wavenumber_cm1=1700.0,
-        end_wavenumber_cm1=1800.0,
-        scan_speed_cm1_per_s=4.0,
-        time_origin_offset_ns=620_000.0,
+        applicable_spectral_modes=(MircatSpectralMode.SINGLE_WAVELENGTH,),
+        start_wavenumber_cm1=1845.0,
+        end_wavenumber_cm1=1855.0,
+        scan_speed_cm1_per_s=1.0,
+        time_origin_offset_ns=0.0,
     )
     return ExperimentRecipe(
-        recipe_id="supported-v1-pump-probe",
-        title="Supported v1 pump-probe scan",
+        recipe_id="minimal-baseline-experiment",
+        title="Minimal baseline continuous acquisition",
         mircat=MircatExperimentConfiguration(
-            emission_mode=MircatEmissionMode.PULSED,
-            spectral_mode=MircatSpectralMode.SWEEP_SCAN,
+            emission_mode=MircatEmissionMode.CW,
+            spectral_mode=MircatSpectralMode.SINGLE_WAVELENGTH,
             preferred_qcl=2,
-            pulse_rate_hz=10_000.0,
-            pulse_width_ns=180.0,
-            sweep_scan=MircatSweepScan(
-                start_wavenumber_cm1=1700.0,
-                end_wavenumber_cm1=1800.0,
-                scan_speed_cm1_per_s=4.0,
-                scan_count=1,
-            ),
+            single_wavelength_cm1=1850.0,
         ),
         hf2_primary_acquisition=HF2PrimaryAcquisition(
-            profile_name="dual-detector-r",
+            profile_name="continuous-r",
             stream_selections=(
                 HF2StreamSelection(demod_index=0, component=HF2SampleComponent.R),
             ),
             demodulators=(
-                HF2DemodulatorConfiguration(demod_index=0, sample_rate_hz=224.9),
+                HF2DemodulatorConfiguration(
+                    demod_index=0,
+                    sample_rate_hz=224.9,
+                    harmonic=1,
+                    time_constant_seconds=0.1,
+                ),
             ),
             capture_interval_seconds=0.05,
         ),
-        pump_shots_before_probe=3,
-        probe_timing_mode=ProbeTimingMode.SYNCHRONIZED_PROBE,
+        pump_shots_before_probe=0,
+        probe_timing_mode=ProbeTimingMode.CONTINUOUS_PROBE,
         timing=_timing_defaults(),
         mux_route_selection=_mux_defaults(),
         pico_secondary_capture=PicoSecondaryCapture(
-            mode=pico_mode,
-            trigger_marker=TimingMarker.NDYAG_FIXED_SYNC if pico_mode != PicoMonitoringMode.DISABLED else None,
+            mode=PicoMonitoringMode.DISABLED,
+            trigger_marker=None,
             trigger_input=MuxOutputTarget.PICO_EXTERNAL_TRIGGER,
-            capture_window_ns=120_000.0 if pico_mode != PicoMonitoringMode.DISABLED else None,
-            sample_interval_ns=50.0 if pico_mode != PicoMonitoringMode.DISABLED else None,
-            record_inputs=(
-                (MuxOutputTarget.PICO_CHANNEL_A, MuxOutputTarget.PICO_CHANNEL_B)
-                if pico_mode != PicoMonitoringMode.DISABLED
-                else ()
-            ),
+            capture_window_ns=None,
+            sample_interval_ns=None,
+            record_inputs=(),
         ),
         time_to_wavenumber_mapping=mapping,
-        session_label="Supported v1 simulator baseline",
+        session_label="MIRcat 1850 cm^-1 baseline",
         calibration_references=(calibration,),
     )
 
@@ -188,15 +188,9 @@ def _timing_block_defaults() -> CanonicalTimingBlock:
             probe_enable_window=TimingWindow(TimingMarker.PROBE_ENABLE_WINDOW, 610_000.0, 40_000.0),
             slave_timing_marker=TimingEvent(TimingMarker.SLAVE_TIMING_MARKER, 620_000.0, 100.0),
         ),
-        acquisition_timing_mode=AcquisitionTimingMode.AROUND_SELECTED_SIGNAL,
-        acquisition_reference_marker=TimingMarker.MIRCAT_WAVELENGTH_TRIGGER,
-        selected_digital_markers=(
-            TimingMarker.NDYAG_FIXED_SYNC,
-            TimingMarker.NDYAG_VARIABLE_SYNC,
-            TimingMarker.MIRCAT_TRIGGER_OUT,
-            TimingMarker.MIRCAT_WAVELENGTH_TRIGGER,
-            TimingMarker.SLAVE_TIMING_MARKER,
-        ),
+        acquisition_timing_mode=AcquisitionTimingMode.CONTINUOUS,
+        acquisition_reference_marker=None,
+        selected_digital_markers=(),
     )
 
 
@@ -224,10 +218,10 @@ def _mux_defaults() -> MuxRouteSelection:
 
 def _preset_defaults(recipe: ExperimentRecipe) -> ExperimentPreset:
     return ExperimentPreset(
-        preset_id="preset-supported-v1-default",
-        name="Supported v1 default",
+        preset_id="preset-minimal-baseline",
+        name="Minimal baseline default",
         recipe=recipe,
-        description="Canonical supported-v1 simulator recipe with T660 master/slave timing, MUX routing, and optional Pico monitoring.",
+        description="Fixed MIRcat wavenumber with continuous HF2 acquisition and hidden timing support.",
     )
 
 
@@ -335,12 +329,15 @@ class SimulatedMircatDriver(MircatDriver):
         self._emission_enabled = False
         self._scan_active = False
         self._tuned_target_cm1: float | None = None
+        self._spectral_mode = MircatSpectralMode.SINGLE_WAVELENGTH.value
+        self._tune_state = "idle"
 
     async def connect(self) -> DeviceStatus:
+        self._tune_state = "idle"
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
-            summary="Connected and ready for synchronized probe control.",
+            summary="MIRcat connected and idle.",
             vendor_status=self._vendor_status(),
         )
         return self._status
@@ -349,10 +346,11 @@ class SimulatedMircatDriver(MircatDriver):
         self._armed = False
         self._emission_enabled = False
         self._scan_active = False
+        self._tune_state = "idle"
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
-            summary="Disconnected.",
+            summary="MIRcat disconnected.",
             lifecycle_state=DeviceLifecycleState.DISCONNECTED,
             connected=False,
             ready=False,
@@ -370,10 +368,16 @@ class SimulatedMircatDriver(MircatDriver):
         self._configuration_counter += 1
         self._scan_active = False
         self._tuned_target_cm1 = configuration.single_wavelength_cm1
+        self._spectral_mode = configuration.spectral_mode.value
+        self._tune_state = "tuning" if configuration.spectral_mode == MircatSpectralMode.SINGLE_WAVELENGTH else "idle"
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
-            summary=f"{configuration.spectral_mode.value} recipe applied.",
+            summary=(
+                f"MIRcat tuning to {_format_wavenumber_cm1(configuration.single_wavelength_cm1)}."
+                if configuration.spectral_mode == MircatSpectralMode.SINGLE_WAVELENGTH
+                else f"MIRcat {configuration.spectral_mode.value.replace('_', ' ')} recipe staged."
+            ),
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
             vendor_status=self._vendor_status(),
         )
@@ -395,10 +399,16 @@ class SimulatedMircatDriver(MircatDriver):
 
     async def arm(self) -> DeviceStatus:
         self._armed = True
+        if self._tuned_target_cm1 is not None and not self._scan_active:
+            self._tune_state = "tuned"
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
-            summary="MIRcat armed and waiting for the slave trigger path.",
+            summary=(
+                f"MIRcat armed at {_format_wavenumber_cm1(self._tuned_target_cm1)}."
+                if self._tuned_target_cm1 is not None
+                else "MIRcat armed."
+            ),
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
             vendor_status=self._vendor_status(),
         )
@@ -407,6 +417,7 @@ class SimulatedMircatDriver(MircatDriver):
     async def disarm(self) -> DeviceStatus:
         self._armed = False
         self._scan_active = False
+        self._tune_state = "idle"
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
@@ -417,10 +428,17 @@ class SimulatedMircatDriver(MircatDriver):
 
     async def set_emission_enabled(self, enabled: bool) -> DeviceStatus:
         self._emission_enabled = enabled
+        if enabled and self._tuned_target_cm1 is not None and not self._scan_active:
+            self._tune_state = "tuned"
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
-            summary=f"Emission {'enabled' if enabled else 'disabled'}.",
+            summary=(
+                f"MIRcat emission {'enabled' if enabled else 'disabled'} at "
+                f"{_format_wavenumber_cm1(self._tuned_target_cm1)}."
+                if self._tuned_target_cm1 is not None
+                else f"MIRcat emission {'enabled' if enabled else 'disabled'}."
+            ),
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
             vendor_status=self._vendor_status(),
         )
@@ -433,12 +451,16 @@ class SimulatedMircatDriver(MircatDriver):
     ) -> DeviceStatus:
         self._scan_active = True
         self._tuned_target_cm1 = configuration.single_wavelength_cm1
+        self._spectral_mode = configuration.spectral_mode.value
+        self._tune_state = "tuned" if configuration.spectral_mode == MircatSpectralMode.SINGLE_WAVELENGTH else "idle"
+        if configuration.spectral_mode == MircatSpectralMode.SINGLE_WAVELENGTH:
+            summary = f"MIRcat running at {_format_wavenumber_cm1(configuration.single_wavelength_cm1)}."
+        else:
+            summary = f"MIRcat {configuration.spectral_mode.value.replace('_', ' ')} active."
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
-            summary=(
-                f"{configuration.spectral_mode.value} active with {probe_timing_mode.value}."
-            ),
+            summary=summary,
             lifecycle_state=DeviceLifecycleState.RUNNING,
             ready=False,
             busy=True,
@@ -448,10 +470,11 @@ class SimulatedMircatDriver(MircatDriver):
 
     async def stop_recipe(self) -> DeviceStatus:
         self._scan_active = False
+        self._tune_state = "idle"
         self._status = _base_status(
             device_id="mircat-qcl",
             device_kind=self.device_kind,
-            summary="MIRcat recipe stopped.",
+            summary="MIRcat returned to idle.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
             vendor_status=self._vendor_status(),
         )
@@ -462,6 +485,8 @@ class SimulatedMircatDriver(MircatDriver):
             "armed": self._armed,
             "emission_enabled": self._emission_enabled,
             "scan_active": self._scan_active,
+            "spectral_mode": self._spectral_mode,
+            "tune_state": self._tune_state,
         }
         if self._tuned_target_cm1 is not None:
             vendor_status["tuned_target_cm1"] = self._tuned_target_cm1
@@ -481,23 +506,27 @@ class SimulatedHF2Driver(LabOneHF2Driver):
         self._component = HF2SampleComponent.R.value
         self._sample_rate_hz = 0.0
         self._harmonic = 1
+        self._time_constant_seconds = 0.1
         self._capture_interval_seconds = 0.0
+        self._acquisition_state = "idle"
 
     async def connect(self) -> DeviceStatus:
+        self._acquisition_state = "idle"
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
-            summary="Connected and ready for primary HF2 acquisition.",
+            summary="HF2LI connected and acquisition idle.",
             vendor_status=self._vendor_status(),
         )
         return self._status
 
     async def disconnect(self) -> DeviceStatus:
         self._capture_active = False
+        self._acquisition_state = "idle"
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
-            summary="Disconnected.",
+            summary="HF2LI disconnected.",
             lifecycle_state=DeviceLifecycleState.DISCONNECTED,
             connected=False,
             ready=False,
@@ -514,15 +543,17 @@ class SimulatedHF2Driver(LabOneHF2Driver):
     async def apply_configuration(self, configuration: HF2PrimaryAcquisition) -> DeviceConfiguration:
         self._configuration_counter += 1
         self._capture_active = False
+        self._acquisition_state = "idle"
         self._demod_index = configuration.demodulators[0].demod_index
         self._component = configuration.stream_selections[0].component.value
         self._sample_rate_hz = configuration.demodulators[0].sample_rate_hz
         self._harmonic = configuration.demodulators[0].harmonic
+        self._time_constant_seconds = configuration.demodulators[0].time_constant_seconds or self._time_constant_seconds
         self._capture_interval_seconds = configuration.capture_interval_seconds
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
-            summary="HF2 primary acquisition configured.",
+            summary="HF2LI continuous acquisition configured.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
             vendor_status=self._vendor_status(),
         )
@@ -542,10 +573,11 @@ class SimulatedHF2Driver(LabOneHF2Driver):
 
     async def start_capture(self, recipe: HF2PrimaryAcquisition, session_id: str) -> HF2CaptureHandle:
         self._capture_active = True
+        self._acquisition_state = "running"
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
-            summary=f"Capturing {recipe.profile_name} streams.",
+            summary=f"HF2LI acquisition running ({recipe.profile_name}).",
             lifecycle_state=DeviceLifecycleState.RUNNING,
             ready=False,
             busy=True,
@@ -563,10 +595,11 @@ class SimulatedHF2Driver(LabOneHF2Driver):
 
     async def stop_capture(self, capture_id: str) -> DeviceStatus:
         self._capture_active = False
+        self._acquisition_state = "stopped"
         self._status = _base_status(
             device_id="hf2li-primary",
             device_kind=self.device_kind,
-            summary="HF2 capture stopped. Primary raw artifacts are available.",
+            summary="HF2LI acquisition stopped.",
             lifecycle_state=DeviceLifecycleState.CONFIGURED,
             vendor_status=self._vendor_status(),
         )
@@ -585,10 +618,12 @@ class SimulatedHF2Driver(LabOneHF2Driver):
     def _vendor_status(self) -> dict[str, bool | int | float | str]:
         return {
             "capture_active": self._capture_active,
+            "acquisition_state": self._acquisition_state,
             "demod_index": self._demod_index,
             "component": self._component,
             "sample_rate_hz": self._sample_rate_hz,
             "harmonic": self._harmonic,
+            "time_constant_seconds": self._time_constant_seconds,
             "capture_interval_seconds": self._capture_interval_seconds,
         }
 
@@ -885,7 +920,7 @@ class SimulatedPicoDriver(PicoScopeDriver):
 
 
 @dataclass(frozen=True)
-class Phase3BScenarioContext:
+class SimulatorScenarioContext:
     scenario_id: str
     label: str
     description: str
@@ -898,7 +933,7 @@ class Phase3BScenarioContext:
 
 
 class SupportedV1SimulatorCatalog(SimulatorCatalog):
-    """Catalog of deterministic simulator scenarios for the supported-v1 shell."""
+    """Catalog of deterministic simulator scenarios for the minimal Experiment shell."""
 
     def __init__(self) -> None:
         self._contexts = {
@@ -914,28 +949,28 @@ class SupportedV1SimulatorCatalog(SimulatorCatalog):
     async def create_bundle(self, scenario_id: str) -> SupportedV1SimulatorBundle:
         return self._require_context(scenario_id).bundle
 
-    def get_context(self, scenario_id: str) -> Phase3BScenarioContext:
+    def get_context(self, scenario_id: str) -> SimulatorScenarioContext:
         return self._require_context(scenario_id)
 
-    def list_contexts(self) -> tuple[Phase3BScenarioContext, ...]:
+    def list_contexts(self) -> tuple[SimulatorScenarioContext, ...]:
         return tuple(self._contexts.values())
 
-    def _require_context(self, scenario_id: str) -> Phase3BScenarioContext:
+    def _require_context(self, scenario_id: str) -> SimulatorScenarioContext:
         try:
             return self._contexts[scenario_id]
         except KeyError as exc:
             raise KeyError(f"Unknown simulator scenario: {scenario_id}") from exc
 
 
-def _build_nominal_context() -> Phase3BScenarioContext:
+def _build_nominal_context() -> SimulatorScenarioContext:
     recipe = _recipe_defaults()
     preset = _preset_defaults(recipe)
-    bundle = _build_bundle(description="Nominal supported-v1 simulator bundle.")
+    bundle = _build_bundle(description="Nominal minimal-baseline simulator bundle.")
     saved_session, saved_payloads = _build_saved_session_fixture(recipe, preset)
-    return Phase3BScenarioContext(
+    return SimulatorScenarioContext(
         scenario_id="nominal",
         label="Nominal",
-        description="Supported-v1 nominal run with T660 master/slave timing, MUX routing, and Pico secondary monitoring.",
+        description="Fixed MIRcat wavelength with continuous HF2 acquisition.",
         bundle=bundle,
         recipe=recipe,
         preset=preset,
@@ -945,7 +980,7 @@ def _build_nominal_context() -> Phase3BScenarioContext:
     )
 
 
-def _build_blocked_timing_context() -> Phase3BScenarioContext:
+def _build_blocked_timing_context() -> SimulatorScenarioContext:
     recipe = _recipe_defaults()
     preset = _preset_defaults(recipe)
     bundle = _build_bundle(
@@ -961,10 +996,10 @@ def _build_blocked_timing_context() -> Phase3BScenarioContext:
         ),
         description="Blocked preflight bundle with missing slave timing controller.",
     )
-    return Phase3BScenarioContext(
+    return SimulatorScenarioContext(
         scenario_id="blocked_timing",
         label="Blocked Timing",
-        description="Preflight blocks because the required T660-1 slave timing controller is unavailable.",
+        description="A hidden timing dependency is unavailable, so the experiment cannot start.",
         bundle=bundle,
         recipe=recipe,
         preset=preset,
@@ -972,14 +1007,14 @@ def _build_blocked_timing_context() -> Phase3BScenarioContext:
     )
 
 
-def _build_faulted_context() -> Phase3BScenarioContext:
+def _build_faulted_context() -> SimulatorScenarioContext:
     recipe = _recipe_defaults()
     preset = _preset_defaults(recipe)
     bundle = _build_bundle(description="Fault-injection bundle with a deterministic HF2 fault.")
-    return Phase3BScenarioContext(
+    return SimulatorScenarioContext(
         scenario_id="faulted_hf2",
         label="Faulted HF2",
-        description="The supported-v1 run starts normally, captures primary and secondary artifacts, then faults explicitly on the HF2 path.",
+        description="The experiment starts normally, then faults explicitly on the HF2 path.",
         bundle=bundle,
         recipe=recipe,
         preset=preset,
@@ -987,7 +1022,7 @@ def _build_faulted_context() -> Phase3BScenarioContext:
     )
 
 
-def _build_pico_optional_context() -> Phase3BScenarioContext:
+def _build_pico_optional_context() -> SimulatorScenarioContext:
     recipe = _recipe_defaults()
     preset = _preset_defaults(recipe)
     bundle = _build_bundle(
@@ -1001,10 +1036,10 @@ def _build_pico_optional_context() -> Phase3BScenarioContext:
         ),
         description="Optional Pico unavailable bundle.",
     )
-    return Phase3BScenarioContext(
+    return SimulatorScenarioContext(
         scenario_id="pico_optional",
         label="Pico Optional",
-        description="Pico secondary monitoring is requested but unavailable, so preflight warns while the primary supported-v1 path remains usable.",
+        description="Pico remains outside the main experiment flow for this MVP.",
         bundle=bundle,
         recipe=recipe,
         preset=preset,
@@ -1024,14 +1059,14 @@ def _build_bundle(
             initial_status=_base_status(
                 device_id="mircat-qcl",
                 device_kind=DeviceKind.MIRCAT,
-                summary="Connected and ready for MIRcat probe control.",
+                summary="Connected and ready for fixed-wavelength probe control.",
             )
         ),
         hf2li=SimulatedHF2Driver(
             initial_status=_base_status(
                 device_id="hf2li-primary",
                 device_kind=DeviceKind.LABONE_HF2LI,
-                summary="Connected and ready for primary HF2 capture.",
+                summary="Connected and ready for continuous HF2 acquisition.",
             )
         ),
         t660_master=SimulatedT660Driver(
@@ -1082,84 +1117,66 @@ def _build_nominal_plan(recipe: ExperimentRecipe, session_id: str, run_id: str) 
     hf2_live_points = build_live_data_points(
         run_id,
         "hf2.demod0.r",
-        "Wavenumber",
-        "cm^-1",
+        "Elapsed time",
+        "s",
         (
-            (1700.0, 0.14),
-            (1725.0, 0.18),
-            (1750.0, 0.23),
-            (1775.0, 0.19),
-            (1800.0, 0.17),
+            (0.0, 0.14),
+            (1.0, 0.18),
+            (2.0, 0.23),
+            (3.0, 0.19),
+            (4.0, 0.17),
         ),
-    )
-    pico_live_points = build_live_data_points(
-        run_id,
-        "pico.channel_a",
-        "Time",
-        "ns",
-        (
-            (0.0, 0.01),
-            (200.0, 0.45),
-            (600.0, 0.77),
-            (900.0, 0.21),
-        ),
-        source_role=ArtifactSourceRole.SECONDARY_MONITOR,
     )
     return RunExecutionPlan(
         steps=(
             RunStepTemplate(
                 phase=RunPhase.STARTING,
-                active_step="timing_and_primary_capture_armed",
+                active_step="probe_and_acquisition_armed",
                 progress_fraction=0.15,
-                message="Master/slave timing, MIRcat probe control, and primary HF2 capture are armed.",
+                message="The fixed-wavelength baseline experiment is starting.",
                 events=(
                     RunEventTemplate(
                         event_type=RunEventType.RUN_STARTED,
-                        source="experiment-engine",
-                        message="Supported-v1 run started on the canonical coordinated path.",
+                        source="experiment",
+                        message="Experiment started.",
                     ),
                     RunEventTemplate(
                         event_type=RunEventType.DEVICE_STATUS_CHANGED,
-                        source="drivers.t660",
-                        message="T660-2 master and T660-1 slave timing outputs are armed from the shared T0 model.",
+                        source="laser",
+                        message=f"MIRcat tuned to {_format_wavenumber_cm1(recipe.mircat.single_wavelength_cm1)}.",
+                    ),
+                    RunEventTemplate(
+                        event_type=RunEventType.DEVICE_STATUS_CHANGED,
+                        source="laser",
+                        message="Emission enabled.",
                     ),
                 ),
             ),
             RunStepTemplate(
                 phase=RunPhase.RUNNING,
-                active_step="primary_and_secondary_acquisition",
+                active_step="continuous_primary_acquisition",
                 progress_fraction=0.6,
-                message="HF2 primary acquisition is streaming while Pico captures the selected monitor routes.",
+                message="Primary HF2LI acquisition is running at the fixed MIRcat wavelength.",
                 events=(
                     RunEventTemplate(
-                        event_type=RunEventType.RAW_ARTIFACT_REGISTERED,
-                        source="data-pipeline",
-                        message="Primary HF2 raw capture registered for the active session.",
+                        event_type=RunEventType.DEVICE_STATUS_CHANGED,
+                        source="hf2li",
+                        message="Acquisition started.",
                     ),
                     RunEventTemplate(
                         event_type=RunEventType.RAW_ARTIFACT_REGISTERED,
-                        source="data-pipeline",
-                        message="Secondary Pico monitor capture registered for the active session.",
+                        source="hf2li",
+                        message="HF2LI primary artifact registered.",
                     ),
                 ),
-                live_data_points=(*hf2_live_points, *pico_live_points),
+                live_data_points=hf2_live_points,
                 raw_artifacts=(
                     RawArtifactTemplate(
                         device_kind=DeviceKind.LABONE_HF2LI,
                         stream_name="hf2.demod0.r",
-                        relative_path=f"sessions/{session_id}/artifacts/raw/hf2_demod0_r.parquet",
+                        relative_path=f"sessions/{session_id}/artifacts/raw/hf2_continuous_r.parquet",
                         record_count=len(hf2_live_points),
                         source_role=ArtifactSourceRole.PRIMARY_RAW,
-                        metadata={"mapping_id": recipe.time_to_wavenumber_mapping.mapping_id},
-                    ),
-                    RawArtifactTemplate(
-                        device_kind=DeviceKind.PICOSCOPE_5244D,
-                        stream_name="pico.channel_a",
-                        relative_path=f"sessions/{session_id}/artifacts/raw/pico_channel_a_trace.parquet",
-                        record_count=len(pico_live_points),
-                        source_role=ArtifactSourceRole.SECONDARY_MONITOR,
-                        mux_output_target=MuxOutputTarget.PICO_CHANNEL_A.value,
-                        related_marker=TimingMarker.NDYAG_FIXED_SYNC.value,
                     ),
                 ),
             ),
@@ -1167,15 +1184,20 @@ def _build_nominal_plan(recipe: ExperimentRecipe, session_id: str, run_id: str) 
                 phase=RunPhase.COMPLETED,
                 active_step="session_complete",
                 progress_fraction=1.0,
-                message="The supported-v1 simulator run completed and can be reopened from Results.",
+                message="The baseline experiment is complete and the session can be reopened.",
                 events=(
                     RunEventTemplate(
+                        event_type=RunEventType.DEVICE_STATUS_CHANGED,
+                        source="hf2li",
+                        message="Acquisition stopped.",
+                    ),
+                    RunEventTemplate(
                         event_type=RunEventType.RUN_COMPLETED,
-                        source="experiment-engine",
-                        message="Supported-v1 timing, MIRcat probing, HF2 acquisition, and optional Pico monitoring completed successfully.",
+                        source="experiment",
+                        message="Experiment stopped.",
                     ),
                 ),
-                live_data_points=(*hf2_live_points, *pico_live_points),
+                live_data_points=hf2_live_points,
                 outcome=StepOutcome.COMPLETE,
             ),
         )
@@ -1186,41 +1208,41 @@ def _build_nominal_without_pico_plan(recipe: ExperimentRecipe, session_id: str, 
     hf2_live_points = build_live_data_points(
         run_id,
         "hf2.demod0.r",
-        "Wavenumber",
-        "cm^-1",
+        "Elapsed time",
+        "s",
         (
-            (1700.0, 0.14),
-            (1725.0, 0.18),
-            (1750.0, 0.22),
-            (1775.0, 0.20),
-            (1800.0, 0.16),
+            (0.0, 0.14),
+            (1.0, 0.18),
+            (2.0, 0.22),
+            (3.0, 0.20),
+            (4.0, 0.16),
         ),
     )
     return RunExecutionPlan(
         steps=(
             RunStepTemplate(
                 phase=RunPhase.STARTING,
-                active_step="timing_and_primary_capture_armed",
+                active_step="probe_and_acquisition_armed",
                 progress_fraction=0.15,
-                message="Timing, probe control, and primary HF2 capture are armed while Pico remains unavailable.",
+                message="The tuned probe and continuous HF2 acquisition are armed for the experiment.",
                 events=(
                     RunEventTemplate(
                         event_type=RunEventType.RUN_STARTED,
                         source="experiment-engine",
-                        message="Supported-v1 run started without Pico secondary monitoring because the optional device is unavailable.",
+                        message="The minimal baseline experiment started on the canonical path.",
                     ),
                 ),
             ),
             RunStepTemplate(
                 phase=RunPhase.RUNNING,
-                active_step="primary_acquisition_only",
+                active_step="continuous_primary_acquisition",
                 progress_fraction=0.65,
-                message="HF2 primary acquisition is streaming while the persisted session records Pico unavailability explicitly.",
+                message="HF2 continuous acquisition is recording the primary signal at the tuned wavelength.",
                 events=(
                     RunEventTemplate(
                         event_type=RunEventType.RAW_ARTIFACT_REGISTERED,
                         source="data-pipeline",
-                        message="Primary HF2 raw capture registered while Pico remained unavailable.",
+                        message="Primary HF2 raw capture registered for the active session.",
                     ),
                 ),
                 live_data_points=hf2_live_points,
@@ -1228,10 +1250,9 @@ def _build_nominal_without_pico_plan(recipe: ExperimentRecipe, session_id: str, 
                     RawArtifactTemplate(
                         device_kind=DeviceKind.LABONE_HF2LI,
                         stream_name="hf2.demod0.r",
-                        relative_path=f"sessions/{session_id}/artifacts/raw/hf2_demod0_r.parquet",
+                        relative_path=f"sessions/{session_id}/artifacts/raw/hf2_continuous_r.parquet",
                         record_count=len(hf2_live_points),
                         source_role=ArtifactSourceRole.PRIMARY_RAW,
-                        metadata={"mapping_id": recipe.time_to_wavenumber_mapping.mapping_id},
                     ),
                 ),
             ),
@@ -1239,12 +1260,12 @@ def _build_nominal_without_pico_plan(recipe: ExperimentRecipe, session_id: str, 
                 phase=RunPhase.COMPLETED,
                 active_step="session_complete",
                 progress_fraction=1.0,
-                message="The primary supported-v1 path completed without secondary monitor artifacts.",
+                message="The experiment completed and can be reopened from Results.",
                 events=(
                     RunEventTemplate(
                         event_type=RunEventType.RUN_COMPLETED,
                         source="experiment-engine",
-                        message="Supported-v1 run completed with HF2 primary raw data only.",
+                        message="Fixed-wavelength probing and continuous HF2 acquisition completed successfully.",
                     ),
                 ),
                 live_data_points=hf2_live_points,
@@ -1395,37 +1416,20 @@ def _build_saved_session_fixture(
     hf2_live_points = build_live_data_points(
         "saved-run-001",
         "hf2.demod0.r",
-        "Wavenumber",
-        "cm^-1",
+        "Elapsed time",
+        "s",
         (
-            (1700.0, 0.14),
-            (1725.0, 0.18),
-            (1750.0, 0.23),
-            (1775.0, 0.19),
-            (1800.0, 0.17),
+            (0.0, 0.14),
+            (1.0, 0.18),
+            (2.0, 0.23),
+            (3.0, 0.19),
+            (4.0, 0.17),
         ),
-    )
-    pico_live_points = build_live_data_points(
-        "saved-run-001",
-        "pico.channel_a",
-        "Time",
-        "ns",
-        (
-            (0.0, 0.01),
-            (200.0, 0.45),
-            (600.0, 0.77),
-            (900.0, 0.21),
-        ),
-        source_role=ArtifactSourceRole.SECONDARY_MONITOR,
     )
     return manifest, {
         manifest.raw_artifacts[0].relative_path: _live_data_points_to_rows(
             hf2_live_points,
             device_kind=DeviceKind.LABONE_HF2LI,
-        ),
-        manifest.raw_artifacts[1].relative_path: _live_data_points_to_rows(
-            pico_live_points,
-            device_kind=DeviceKind.PICOSCOPE_5244D,
         ),
     }
 
@@ -1437,27 +1441,12 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
         session_id="saved-session-001",
         device_kind=DeviceKind.LABONE_HF2LI,
         stream_name="hf2.demod0.r",
-        relative_path="sessions/saved-session-001/artifacts/raw/hf2_demod0_r.parquet",
+        relative_path="sessions/saved-session-001/artifacts/raw/hf2_continuous_r.parquet",
         created_at=created_at,
         record_count=5,
         content_type="application/vnd.apache.parquet",
         source_role=ArtifactSourceRole.PRIMARY_RAW,
         registered_by_event_id="saved-session-event-primary-raw",
-        metadata={"mapping_id": recipe.time_to_wavenumber_mapping.mapping_id},
-    )
-    secondary_raw = RawDataArtifact(
-        artifact_id="saved-session-secondary-raw-1",
-        session_id="saved-session-001",
-        device_kind=DeviceKind.PICOSCOPE_5244D,
-        stream_name="pico.channel_a",
-        relative_path="sessions/saved-session-001/artifacts/raw/pico_channel_a_trace.parquet",
-        created_at=created_at,
-        record_count=4,
-        content_type="application/vnd.apache.parquet",
-        source_role=ArtifactSourceRole.SECONDARY_MONITOR,
-        mux_output_target=MuxOutputTarget.PICO_CHANNEL_A.value,
-        related_marker=TimingMarker.NDYAG_FIXED_SYNC.value,
-        registered_by_event_id="saved-session-event-secondary-raw",
     )
     events = (
         RunEvent(
@@ -1465,8 +1454,8 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
             run_id="saved-run-001",
             event_type=RunEventType.SESSION_CREATED,
             emitted_at=created_at,
-            source="experiment-engine",
-            message="Saved simulator session record was created before the historical run.",
+            source="session",
+            message="Session opened.",
             phase=RunPhase.STARTING,
             session_id="saved-session-001",
             timing_summary=build_timing_summary(recipe),
@@ -1478,11 +1467,71 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
         RunEvent(
             event_id="saved-session-event-configured",
             run_id="saved-run-001",
-            event_type=RunEventType.DEVICE_CONFIGURATION_APPLIED,
+            event_type=RunEventType.DEVICE_STATUS_CHANGED,
             emitted_at=created_at,
-            source="experiment-engine",
-            message="Saved simulator timing, routing, and acquisition settings were applied.",
+            source="laser",
+            message=f"MIRcat tuned to {_format_wavenumber_cm1(recipe.mircat.single_wavelength_cm1)}.",
             phase=RunPhase.STARTING,
+            session_id="saved-session-001",
+            timing_summary=build_timing_summary(recipe),
+            pump_probe_summary=build_pump_probe_summary(recipe),
+            selected_markers=recipe.timing.selected_digital_markers,
+            mux_summary=summarize_mux_routes(recipe.mux_route_selection),
+            pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
+        ),
+        RunEvent(
+            event_id="saved-session-event-emission-enabled",
+            run_id="saved-run-001",
+            event_type=RunEventType.DEVICE_STATUS_CHANGED,
+            emitted_at=created_at,
+            source="laser",
+            message="Emission enabled.",
+            phase=RunPhase.STARTING,
+            session_id="saved-session-001",
+            timing_summary=build_timing_summary(recipe),
+            pump_probe_summary=build_pump_probe_summary(recipe),
+            selected_markers=recipe.timing.selected_digital_markers,
+            mux_summary=summarize_mux_routes(recipe.mux_route_selection),
+            pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
+        ),
+        RunEvent(
+            event_id="saved-session-event-run-started",
+            run_id="saved-run-001",
+            event_type=RunEventType.RUN_STARTED,
+            emitted_at=created_at,
+            source="experiment",
+            message="Experiment started.",
+            phase=RunPhase.STARTING,
+            session_id="saved-session-001",
+            timing_summary=build_timing_summary(recipe),
+            pump_probe_summary=build_pump_probe_summary(recipe),
+            selected_markers=recipe.timing.selected_digital_markers,
+            mux_summary=summarize_mux_routes(recipe.mux_route_selection),
+            pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
+        ),
+        RunEvent(
+            event_id="saved-session-event-hf2-connected",
+            run_id="saved-run-001",
+            event_type=RunEventType.DEVICE_STATUS_CHANGED,
+            emitted_at=created_at,
+            source="hf2li",
+            message="HF2LI connected.",
+            phase=RunPhase.RUNNING,
+            session_id="saved-session-001",
+            timing_summary=build_timing_summary(recipe),
+            pump_probe_summary=build_pump_probe_summary(recipe),
+            selected_markers=recipe.timing.selected_digital_markers,
+            mux_summary=summarize_mux_routes(recipe.mux_route_selection),
+            pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
+        ),
+        RunEvent(
+            event_id="saved-session-event-acquisition-started",
+            run_id="saved-run-001",
+            event_type=RunEventType.DEVICE_STATUS_CHANGED,
+            emitted_at=created_at,
+            source="hf2li",
+            message="Acquisition started.",
+            phase=RunPhase.RUNNING,
             session_id="saved-session-001",
             timing_summary=build_timing_summary(recipe),
             pump_probe_summary=build_pump_probe_summary(recipe),
@@ -1495,8 +1544,8 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
             run_id="saved-run-001",
             event_type=RunEventType.RAW_ARTIFACT_REGISTERED,
             emitted_at=created_at,
-            source="data-pipeline",
-            message="Saved simulator HF2 primary raw artifact was registered.",
+            source="hf2li",
+            message="HF2LI primary artifact registered.",
             phase=RunPhase.RUNNING,
             session_id="saved-session-001",
             timing_summary=build_timing_summary(recipe),
@@ -1506,13 +1555,13 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
             pico_summary=summarize_pico_capture(recipe.pico_secondary_capture),
         ),
         RunEvent(
-            event_id="saved-session-event-secondary-raw",
+            event_id="saved-session-event-acquisition-stopped",
             run_id="saved-run-001",
-            event_type=RunEventType.RAW_ARTIFACT_REGISTERED,
+            event_type=RunEventType.DEVICE_STATUS_CHANGED,
             emitted_at=created_at,
-            source="data-pipeline",
-            message="Saved simulator Pico secondary monitor artifact was registered.",
-            phase=RunPhase.RUNNING,
+            source="hf2li",
+            message="Acquisition stopped.",
+            phase=RunPhase.COMPLETED,
             session_id="saved-session-001",
             timing_summary=build_timing_summary(recipe),
             pump_probe_summary=build_pump_probe_summary(recipe),
@@ -1525,8 +1574,8 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
             run_id="saved-run-001",
             event_type=RunEventType.RUN_COMPLETED,
             emitted_at=created_at,
-            source="experiment-engine",
-            message="Saved simulator session completed previously.",
+            source="experiment",
+            message="Experiment stopped.",
             phase=RunPhase.COMPLETED,
             session_id="saved-session-001",
             timing_summary=build_timing_summary(recipe),
@@ -1593,17 +1642,9 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
         settings={"route_set_name": recipe.mux_route_selection.route_set_name},
         mux_route_selection=recipe.mux_route_selection,
     )
-    pico_configuration = DeviceConfiguration(
-        configuration_id="saved-pico-config",
-        device_id="picoscope-5244d",
-        device_kind=DeviceKind.PICOSCOPE_5244D,
-        applied_at=created_at,
-        settings={"mode": recipe.pico_secondary_capture.mode.value},
-        pico_capture=recipe.pico_secondary_capture,
-    )
     return SessionManifest(
         session_id="saved-session-001",
-        version="phase3b.v1",
+        version="supported-v1",
         created_at=created_at,
         updated_at=created_at,
         status=SessionStatus.COMPLETED,
@@ -1614,10 +1655,9 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
             mircat_configuration,
             hf2_configuration,
             mux_configuration,
-            pico_configuration,
         ),
         calibration_references=recipe.calibration_references,
-        raw_artifacts=(primary_raw, secondary_raw),
+        raw_artifacts=(primary_raw,),
         event_timeline=events,
         processing_outputs=(),
         analysis_outputs=(),
@@ -1679,6 +1719,8 @@ def _build_saved_session(recipe: ExperimentRecipe, preset: ExperimentPreset) -> 
         ),
         notes=(
             "Saved session fixture for Results reopen scaffolding.",
+            "sample_id:polymer-film-a12",
+            "operator_notes:Fixed MIRcat baseline with continuous HF2LI acquisition.",
             "runtime_mode:simulator:nominal",
             "runtime_description:Supported-v1 nominal saved-session fixture.",
         ),

@@ -1,11 +1,14 @@
-"""Phase 3B contract validation for the supported-v1 experiment slice."""
+"""Supported-v1 contract validation for the experiment slice."""
 
 from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
 
-from _path_setup import ROOT  # noqa: F401
+try:
+    from _path_setup import ROOT  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - depends on unittest invocation style
+    from tests._path_setup import ROOT
 from ircp_contracts import (
     AcquisitionTimingMode,
     AnalogMonitorRoute,
@@ -58,7 +61,7 @@ from ircp_experiment_engine.runtime import build_fault, build_pump_probe_summary
 def _build_recipe(*, with_mapping: bool = True) -> ExperimentRecipe:
     calibration = CalibrationReference(
         calibration_id="cal-1",
-        version="phase3b.v1",
+        version="supported-v1",
         kind="time_to_wavenumber",
         location="calibration.json",
     )
@@ -153,7 +156,7 @@ def _build_recipe(*, with_mapping: bool = True) -> ExperimentRecipe:
     )
 
 
-class Phase3BContractTests(unittest.TestCase):
+class SupportedV1ContractTests(unittest.TestCase):
     def test_supported_v1_recipe_construction_preserves_required_device_roles(self) -> None:
         recipe = _build_recipe()
 
@@ -224,7 +227,7 @@ class Phase3BContractTests(unittest.TestCase):
 
         manifest = SessionManifest(
             session_id="session-1",
-            version="phase3b.v1",
+            version="supported-v1",
             created_at=now,
             updated_at=now,
             status=SessionStatus.COMPLETED,
@@ -290,7 +293,7 @@ class Phase3BContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SessionManifest(
                 session_id="session-1",
-                version="phase3b.v1",
+                version="supported-v1",
                 created_at=now,
                 updated_at=now,
                 status=SessionStatus.COMPLETED,
@@ -375,7 +378,7 @@ class Phase3BContractTests(unittest.TestCase):
 
         manifest = SessionManifest(
             session_id="session-faulted-1",
-            version="phase3b.v1",
+            version="supported-v1",
             created_at=now,
             updated_at=now,
             status=SessionStatus.FAULTED,

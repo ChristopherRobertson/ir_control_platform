@@ -60,7 +60,7 @@ This is the next implementation pass.
 Deliver a usable, reviewable, intuitive starting interface that makes the default operator path obvious.
 
 The UI must become a task UI, not an architecture UI.
-The default experience must center on one `Operate` workflow, even if the implementation still uses separate `setup` and `run` routes internally.
+The default experience must center on one `Experiment` page for the minimal baseline workflow.
 
 ### Required contents
 The MVP must cover these sections:
@@ -76,13 +76,12 @@ The MVP must cover these sections:
 - arm and disarm
 - emission on and off
 - tune to wavelength or wavenumber
-- start scan
-- stop scan
 - current laser status
 
 #### Lock-in / Acquisition
 - connect and disconnect HF2LI
 - a small set of key acquisition parameters only
+- one operator-facing filter control
 - start acquisition
 - stop acquisition
 - current acquisition status
@@ -151,13 +150,13 @@ Scope:
 - maintenance and recovery tools
 
 Exit condition:
-- advanced users can reach needed detail without contaminating the primary `Operate` workflow
+- advanced users can reach needed detail without contaminating the primary `Experiment` workflow
 
 ## 9. Phase 4 — Incremental Backend Wiring
 Wire real actions in UI priority order, not architecture-diagram order.
 
 Priority:
-1. actions needed by the default `Operate` workflow
+1. actions needed by the default `Experiment` workflow
 2. data needed by Results and recent-session review
 3. actions needed by Advanced and Service surfaces
 

@@ -1,4 +1,4 @@
-"""Public Phase 3B contracts for the IR control platform."""
+"""Public supported-v1 contracts for the IR control platform."""
 
 from .common import (
     CONTRACT_VERSION,
