@@ -68,9 +68,27 @@ class IRCPUiApp:
             return self._html(start_response, render_layout(header, render_operate_page(page, scenario_id)))
         if path == "/results":
             selected_session_id = _extract_value(query, "session_id")
+            search = _extract_value(query, "search") or ""
+            status_filter = _extract_value(query, "status") or "all"
+            sort_order = _extract_value(query, "sort") or "updated_desc"
             header = asyncio.run(runtime.get_header_status("results"))
-            page = asyncio.run(runtime.get_results_page(selected_session_id=selected_session_id))
+            page = asyncio.run(
+                runtime.get_results_page(
+                    selected_session_id=selected_session_id,
+                    search=search,
+                    status_filter=status_filter,
+                    sort_order=sort_order,
+                )
+            )
             return self._html(start_response, render_layout(header, render_results_page(page, scenario_id)))
+        if path == "/results/download":
+            session_id = _require_value(query, "session_id")
+            asset = _extract_value(query, "asset")
+            artifact_id = _extract_value(query, "artifact_id")
+            download = asyncio.run(
+                runtime.get_results_download(session_id, asset=asset, artifact_id=artifact_id)
+            )
+            return self._download(start_response, download.filename, download.content_type, download.body)
         if path == "/advanced":
             header = asyncio.run(runtime.get_header_status("advanced"))
             page = asyncio.run(runtime.get_advanced_page())
@@ -375,6 +393,17 @@ class IRCPUiApp:
     def _respond(self, start_response: StartResponse, status: str, body: str) -> list[bytes]:
         start_response(status, [("Content-Type", "text/plain; charset=utf-8")])
         return [body.encode("utf-8")]
+
+    def _download(self, start_response: StartResponse, filename: str, content_type: str, body: bytes) -> list[bytes]:
+        start_response(
+            "200 OK",
+            [
+                ("Content-Type", content_type),
+                ("Content-Disposition", f'attachment; filename="{filename}"'),
+                ("Content-Length", str(len(body))),
+            ],
+        )
+        return [body]
 
     def _redirect(self, start_response: StartResponse, location: str) -> list[bytes]:
         start_response("303 See Other", [("Location", location)])

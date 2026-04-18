@@ -126,6 +126,15 @@ class SessionSummaryCard:
 
 
 @dataclass(frozen=True)
+class ResultsFilterModel:
+    search_value: str = ""
+    status_options: tuple[FormOptionModel, ...] = ()
+    sort_options: tuple[FormOptionModel, ...] = ()
+    visible_session_count: int = 0
+    total_session_count: int = 0
+
+
+@dataclass(frozen=True)
 class StatusItemModel:
     label: str
     value: str
@@ -152,6 +161,35 @@ class SurfaceActionModel:
     tone: str = "primary"
     disabled: bool = False
     helper_text: str = ""
+    query_params: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class ResultsTracePreviewModel:
+    title: str
+    subtitle: str
+    sample_count_label: str
+    axis_label: str
+    axis_start_label: str
+    axis_end_label: str
+    value_min_label: str
+    value_max_label: str
+    polyline_points: str | None = None
+    note_lines: tuple[str, ...] = ()
+    state: PageStateModel | None = None
+
+
+@dataclass(frozen=True)
+class ResultsArtifactRowModel:
+    kind_label: str
+    artifact_id: str
+    source_label: str
+    stream_label: str
+    records_label: str
+    created_at: datetime
+    path: str
+    details: tuple[str, ...] = ()
+    download_action: SurfaceActionModel | None = None
 
 
 @dataclass(frozen=True)
@@ -217,11 +255,15 @@ class ResultsPageModel:
     subtitle: str
     state: PageStateModel | None
     surface_badges: tuple[StatusBadge, ...]
+    filters: ResultsFilterModel
     sessions: tuple[SessionSummaryCard, ...]
     selected_session: SessionSummaryCard | None
+    selected_session_metrics: tuple[StatusItemModel, ...]
     detail_panels: tuple[SummaryPanel, ...]
     artifact_panels: tuple[SummaryPanel, ...] = ()
+    artifact_rows: tuple[ResultsArtifactRowModel, ...] = ()
     visualization_panels: tuple[SummaryPanel, ...] = ()
+    trace_previews: tuple[ResultsTracePreviewModel, ...] = ()
     storage_panels: tuple[SummaryPanel, ...] = ()
     export_panels: tuple[SummaryPanel, ...] = ()
     toolbar_actions: tuple[SurfaceActionModel, ...] = ()

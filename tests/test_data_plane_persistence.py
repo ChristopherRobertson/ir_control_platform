@@ -410,8 +410,11 @@ class DataPlanePersistenceTests(unittest.TestCase):
         self.assertIsNotNone(results_page.selected_session)
         assert results_page.selected_session is not None
         self.assertEqual(results_page.selected_session.session_id, run_state.session_id)
+        self.assertGreater(len(results_page.selected_session_metrics), 0)
         self.assertGreater(len(results_page.detail_panels), 0)
         self.assertGreater(len(results_page.artifact_panels), 0)
+        self.assertGreater(len(results_page.artifact_rows), 0)
+        self.assertGreater(len(results_page.trace_previews), 0)
         self.assertGreater(len(results_page.event_log), 0)
         self.assertIn("runtime_mode:simulator:nominal", manifest.notes)
         self.assertTrue((storage_root / "sessions" / run_state.session_id / "manifest.json").is_file())
