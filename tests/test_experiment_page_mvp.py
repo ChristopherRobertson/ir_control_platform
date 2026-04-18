@@ -78,6 +78,10 @@ class ExperimentPageMvpTests(unittest.TestCase):
                 return field
         self.skipTest("Experiment type selector is not present in the current Experiment page.")
 
+    @staticmethod
+    def _visible_action_labels(page) -> tuple[str, ...]:
+        return tuple(button.label for button in page.laser_panel.actions if not button.hidden)
+
     def test_root_lands_on_the_experiment_page(self) -> None:
         app = self._create_app()
 
@@ -136,7 +140,7 @@ class ExperimentPageMvpTests(unittest.TestCase):
         mode_field = self._get_experiment_mode_field(operate_page)
 
         option_labels = {option.label for option in mode_field.options}
-        action_labels = tuple(button.label for button in operate_page.laser_panel.actions)
+        action_labels = self._visible_action_labels(operate_page)
         field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
 
         self.assertIn("Fixed Wavelength", option_labels)
@@ -158,7 +162,7 @@ class ExperimentPageMvpTests(unittest.TestCase):
         asyncio.run(runtime.set_experiment_type("wavelength_scan"))
         operate_page = asyncio.run(runtime.get_operate_page())
 
-        action_labels = tuple(button.label for button in operate_page.laser_panel.actions)
+        action_labels = self._visible_action_labels(operate_page)
         field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
 
         self.assertIn("Start Scan", action_labels)
@@ -167,8 +171,8 @@ class ExperimentPageMvpTests(unittest.TestCase):
         self.assertIn("Emission Mode", field_labels)
         self.assertIn("Start wavenumber (cm^-1)", field_labels)
         self.assertIn("Stop wavenumber (cm^-1)", field_labels)
-        self.assertIn("Step size (cm^-1)", field_labels)
-        self.assertIn("Dwell time per point (ms)", field_labels)
+        self.assertIn("Scan Speed", field_labels)
+        self.assertNotIn("Dwell time per point (ms)", field_labels)
         self.assertNotIn("Wavenumber (cm^-1)", field_labels)
 
     def test_pulsed_mode_exposes_pulse_fields(self) -> None:

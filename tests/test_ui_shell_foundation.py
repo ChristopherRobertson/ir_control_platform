@@ -67,6 +67,10 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.addCleanup(tempdir.cleanup)
         return create_simulator_app(storage_root=Path(tempdir.name))
 
+    @staticmethod
+    def _visible_action_buttons(panel):
+        return tuple(button for button in panel.actions if not button.hidden)
+
     def test_root_redirects_to_experiment(self) -> None:
         app = self._create_app()
         status, headers, _body = _call_wsgi(app, method="GET", path="/")
@@ -151,10 +155,11 @@ class OperatorFirstUiTests(unittest.TestCase):
     def test_mircat_panel_uses_toggle_controls(self) -> None:
         runtimes = self._create_runtime_map()
         operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
+        visible_actions = self._visible_action_buttons(operate_page.laser_panel)
 
         self.assertEqual(tuple(button.label for button in operate_page.laser_panel.header_actions), ("Disconnect",))
         self.assertEqual(operate_page.laser_panel.header_actions[0].tone, "danger")
-        self.assertEqual(tuple(button.label for button in operate_page.laser_panel.actions), ("Arm", "Tune", "Emission On"))
+        self.assertEqual(tuple(button.label for button in visible_actions), ("Arm", "Tune", "Emission On"))
         self.assertEqual(operate_page.laser_panel.title, "MIRcat")
         self.assertIn("Operating Mode", tuple(field.label for field in operate_page.laser_panel.fields))
         self.assertIn("Emission Mode", tuple(field.label for field in operate_page.laser_panel.fields))
@@ -175,10 +180,11 @@ class OperatorFirstUiTests(unittest.TestCase):
         asyncio.run(runtime.arm_laser())
         asyncio.run(runtime.set_laser_emission(True))
         operate_page = asyncio.run(runtime.get_operate_page())
+        visible_actions = self._visible_action_buttons(operate_page.laser_panel)
 
-        self.assertEqual(tuple(button.label for button in operate_page.laser_panel.actions), ("Disarm", "Tune", "Emission Off"))
-        self.assertEqual(operate_page.laser_panel.actions[0].tone, "danger")
-        self.assertEqual(operate_page.laser_panel.actions[2].tone, "danger")
+        self.assertEqual(tuple(button.label for button in visible_actions), ("Disarm", "Tune", "Emission Off"))
+        self.assertEqual(visible_actions[0].tone, "danger")
+        self.assertEqual(visible_actions[2].tone, "danger")
 
     def test_mircat_panel_shows_reported_faults_in_footer_callout(self) -> None:
         runtimes = self._create_runtime_map()
@@ -228,14 +234,16 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.assertEqual(tuple(option.label for option in extref_field.options), ("DIO 0", "DIO 1", "DIO 0|1"))
         self.assertEqual(tuple(option.label for option in trigger_field.options), ("DIO 0", "DIO 1", "DIO 0|1"))
 
-    def test_session_panel_keeps_name_sample_notes_and_open_recent_fields(self) -> None:
+    def test_session_panel_keeps_name_sample_id_notes_and_open_recent_fields(self) -> None:
         runtimes = self._create_runtime_map()
         operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
 
         field_labels = tuple(field.label for field in operate_page.session_panel.fields)
+        action_labels = tuple(button.label for button in operate_page.session_panel.actions)
 
-        self.assertEqual(field_labels, ("Name", "Sample", "Notes", "Open Recent"))
-        self.assertEqual(operate_page.session_panel.field_columns, 2)
+        self.assertEqual(field_labels, ("Name", "Sample", "ID", "Notes", "Open Recent"))
+        self.assertEqual(operate_page.session_panel.field_columns, 3)
+        self.assertEqual(action_labels, ("Save Session", "Open Recent", "Delete Session"))
 
     def test_experiment_type_control_exists_and_posts_back_to_experiment(self) -> None:
         app = self._create_app()
@@ -260,6 +268,8 @@ class OperatorFirstUiTests(unittest.TestCase):
     def test_fixed_wavelength_mode_shows_single_tune_controls_only(self) -> None:
         runtimes = self._create_runtime_map()
         operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
+        visible_action_labels = tuple(button.label for button in self._visible_action_buttons(operate_page.laser_panel))
+        action_map = {button.label: button for button in operate_page.laser_panel.actions}
 
         self.assertEqual(
             tuple(field.label for field in operate_page.laser_panel.fields),
@@ -268,9 +278,12 @@ class OperatorFirstUiTests(unittest.TestCase):
         tune_field = next(field for field in operate_page.laser_panel.fields if field.name == "tune_target_cm1")
         self.assertEqual(tune_field.min_value, "1638.8")
         self.assertEqual(tune_field.max_value, "2077.3")
-        self.assertIn("Tune", tuple(button.label for button in operate_page.laser_panel.actions))
-        self.assertNotIn("Start Scan", tuple(button.label for button in operate_page.laser_panel.actions))
-        self.assertNotIn("Stop Scan", tuple(button.label for button in operate_page.laser_panel.actions))
+        self.assertIn("Tune", visible_action_labels)
+        self.assertNotIn("Start Scan", visible_action_labels)
+        self.assertNotIn("Stop Scan", visible_action_labels)
+        self.assertTrue(action_map["Start Scan"].hidden)
+        self.assertTrue(action_map["Stop Scan"].hidden)
+        self.assertFalse(action_map["Tune"].hidden)
 
     def test_wavelength_scan_mode_shows_scan_controls_and_hides_single_tune(self) -> None:
         runtimes = self._create_runtime_map()
@@ -278,6 +291,8 @@ class OperatorFirstUiTests(unittest.TestCase):
 
         asyncio.run(runtime.set_experiment_type("wavelength_scan"))
         operate_page = asyncio.run(runtime.get_operate_page())
+        visible_action_labels = tuple(button.label for button in self._visible_action_buttons(operate_page.laser_panel))
+        action_map = {button.label: button for button in operate_page.laser_panel.actions}
 
         field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
         self.assertIn("Operating Mode", field_labels)
@@ -290,11 +305,18 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.assertEqual(scan_start_field.max_value, "2077.3")
         self.assertEqual(scan_stop_field.min_value, "1638.8")
         self.assertEqual(scan_stop_field.max_value, "2077.3")
-        self.assertIn("Step size (cm^-1)", field_labels)
-        self.assertIn("Dwell time per point (ms)", field_labels)
-        self.assertIn("Start Scan", tuple(button.label for button in operate_page.laser_panel.actions))
-        self.assertIn("Stop Scan", tuple(button.label for button in operate_page.laser_panel.actions))
-        self.assertNotIn("Tune", tuple(button.label for button in operate_page.laser_panel.actions))
+        self.assertIn("Scan Speed", field_labels)
+        scan_speed_field = next(field for field in operate_page.laser_panel.fields if field.name == "scan_step_size_cm1")
+        self.assertEqual(scan_speed_field.help_text, "0.1 to 10000")
+        self.assertEqual(scan_speed_field.min_value, "0.1")
+        self.assertEqual(scan_speed_field.max_value, "10000")
+        self.assertNotIn("Dwell time per point (ms)", field_labels)
+        self.assertIn("Start Scan", visible_action_labels)
+        self.assertIn("Stop Scan", visible_action_labels)
+        self.assertNotIn("Tune", visible_action_labels)
+        self.assertTrue(action_map["Tune"].hidden)
+        self.assertFalse(action_map["Start Scan"].hidden)
+        self.assertFalse(action_map["Stop Scan"].hidden)
         self.assertIsNotNone(operate_page.state)
         assert operate_page.state is not None
         self.assertIn("partially wired", operate_page.state.title.lower())
@@ -317,6 +339,23 @@ class OperatorFirstUiTests(unittest.TestCase):
 
         self.assertEqual(fields["scan_start_cm1"].value, "1638.80")
         self.assertEqual(fields["scan_stop_cm1"].value, "2077.30")
+        self.assertEqual(fields["scan_step_size_cm1"].value, "1.00")
+
+    def test_operating_mode_clamps_scan_speed_to_supported_limits(self) -> None:
+        runtimes = self._create_runtime_map()
+        runtime = runtimes["nominal"]
+
+        asyncio.run(
+            runtime.configure_operating_mode(
+                experiment_type="wavelength_scan",
+                emission_mode="cw",
+                scan_step_size_cm1=50_000.0,
+            )
+        )
+        operate_page = asyncio.run(runtime.get_operate_page())
+        fields = {field.name: field for field in operate_page.laser_panel.fields}
+
+        self.assertEqual(fields["scan_step_size_cm1"].value, "10000.00")
 
     def test_pulsed_mode_derives_duty_cycle_and_applies_pulse_limits(self) -> None:
         runtimes = self._create_runtime_map()
@@ -365,11 +404,19 @@ class OperatorFirstUiTests(unittest.TestCase):
         runtimes = self._create_runtime_map()
         runtime = runtimes["nominal"]
 
-        manifest = asyncio.run(runtime.save_session("Bench MVP", "sample-42", "operator review"))
+        manifest = asyncio.run(
+            runtime.save_session(
+                session_id="bench-mvp-001",
+                session_label="Bench MVP",
+                sample_id="sample-42",
+                operator_notes="operator review",
+            )
+        )
         run_state = asyncio.run(runtime.start_run())
         operate_page = asyncio.run(runtime.get_operate_page())
         results_page = asyncio.run(runtime.get_results_page(run_state.session_id))
 
+        self.assertEqual(manifest.session_id, "bench-mvp-001")
         self.assertEqual(manifest.session_id, run_state.session_id)
         self.assertEqual(run_state.phase, RunPhase.COMPLETED)
         self.assertEqual(operate_page.session_panel.status_items, ())
@@ -380,6 +427,29 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.assertEqual(results_page.selected_session.session_id, run_state.session_id)
         self.assertGreaterEqual(len(results_page.artifact_panels), 1)
         self.assertGreaterEqual(len(results_page.event_log), 1)
+
+    def test_session_id_must_be_unique_across_saved_sessions(self) -> None:
+        runtimes = self._create_runtime_map()
+        runtime = runtimes["nominal"]
+
+        asyncio.run(
+            runtime.save_session(
+                session_id="bench-mvp-unique",
+                session_label="Bench MVP",
+                sample_id="sample-42",
+                operator_notes="operator review",
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            asyncio.run(
+                runtime.save_session(
+                    session_id="bench-mvp-unique",
+                    session_label="Bench MVP 2",
+                    sample_id="sample-43",
+                    operator_notes="duplicate id",
+                )
+            )
 
     def test_ndyag_panel_is_off_by_default_and_disables_inputs(self) -> None:
         runtimes = self._create_runtime_map()
@@ -404,10 +474,21 @@ class OperatorFirstUiTests(unittest.TestCase):
 
         self.assertEqual(status, "200 OK")
         self.assertRegex(body, r'data-async-form="true"')
+        self.assertRegex(body, r'data-field-name="tune_target_cm1"')
+        self.assertRegex(body, r'data-field-name="scan_start_cm1"')
+        self.assertRegex(body, r'data-field-name="scan_stop_cm1"')
+        self.assertRegex(body, r'data-field-name="scan_step_size_cm1"')
+        self.assertNotRegex(body, r'data-field-name="scan_dwell_time_ms"')
         self.assertRegex(body, r'data-field-name="pulse_repetition_rate_hz"')
         self.assertRegex(body, r'data-field-name="pulse_width_ns"')
         self.assertRegex(body, r'data-field-name="pulse_duty_cycle_percent"')
+        self.assertRegex(body, r'data-action-button="/experiment/laser/tune"')
+        self.assertRegex(body, r'data-action-button="/experiment/laser/scan/start"')
+        self.assertRegex(body, r'data-action-button="/experiment/laser/scan/stop"')
         self.assertRegex(body, r"syncOperatingModeFields")
+        self.assertRegex(body, r"syncFieldVisibility")
+        self.assertRegex(body, r"syncActionVisibility")
+        self.assertRegex(body, r"syncNdyagFields")
         self.assertRegex(body, r"submitAsyncForm")
         self.assertRegex(body, r"operatingModeFieldNames")
         self.assertRegex(body, r"root instanceof HTMLFormElement")
@@ -427,7 +508,7 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.assertIn('name="pulse_duty_cycle_percent"', body)
         self.assertIn("readonly", body)
         self.assertNotIn("this.form.submit()", body)
-        self.assertIn("this.form.requestSubmit()", body)
+        self.assertNotIn("this.form.requestSubmit()", body)
 
     def test_experiment_post_routes_redirect_back_to_experiment(self) -> None:
         app = self._create_app()
@@ -437,6 +518,7 @@ class OperatorFirstUiTests(unittest.TestCase):
             path="/experiment/session/save",
             body={
                 "scenario": "nominal",
+                "session_id_input": "bench-mvp-post",
                 "session_label": "Bench MVP",
                 "sample_id": "sample-42",
                 "operator_notes": "operator review",
@@ -445,6 +527,34 @@ class OperatorFirstUiTests(unittest.TestCase):
 
         self.assertEqual(status, "303 See Other")
         self.assertEqual(headers["Location"], "/experiment")
+
+    def test_delete_session_route_removes_saved_session_and_files(self) -> None:
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        storage_root = Path(tempdir.name)
+        app = create_simulator_app(storage_root=storage_root)
+        sessions_root = storage_root / "sessions"
+        seeded_session_id = "saved-session-001"
+        seeded_session_dir = sessions_root / seeded_session_id
+        self.assertTrue(seeded_session_dir.is_dir())
+
+        delete_status, delete_headers, _body = _call_wsgi(
+            app,
+            method="POST",
+            path="/experiment/session/delete",
+            body={
+                "scenario": "nominal",
+                "recent_session_id": seeded_session_id,
+            },
+        )
+
+        self.assertEqual(delete_status, "303 See Other")
+        self.assertEqual(delete_headers["Location"], "/experiment")
+        self.assertFalse(seeded_session_dir.exists())
+
+        page_status, _headers, page_body = _call_wsgi(app, method="GET", path="/experiment")
+        self.assertEqual(page_status, "200 OK")
+        self.assertNotIn(f'<option value="{seeded_session_id}"', page_body)
 
     def test_results_and_advanced_routes_render_secondary_surfaces(self) -> None:
         app = self._create_app()

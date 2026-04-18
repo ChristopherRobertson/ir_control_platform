@@ -316,6 +316,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         self,
         recipe: ExperimentRecipe,
         preset: ExperimentPreset | None,
+        session_id: str | None = None,
         notes: tuple[str, ...] = (),
     ) -> SessionManifest:
         timing_summary = build_timing_summary(recipe)
@@ -357,6 +358,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             pico_capture_snapshot=recipe.pico_secondary_capture,
             pico_summary=pico_summary,
             time_to_wavenumber_mapping=recipe.time_to_wavenumber_mapping,
+            session_id=session_id,
             notes=notes,
         )
 

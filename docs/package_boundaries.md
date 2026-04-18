@@ -4,7 +4,7 @@
 This document records the approved package direction for the supported v1 experiment model and the current operator-first UI plan.
 
 Use it to keep execution order from collapsing ownership.
-The next implementation pass is UI-first from a sequencing perspective, not from an ownership perspective.
+The current implementation direction is UI-first from a sequencing perspective, not from an ownership perspective.
 
 ## Fixed Ownership
 Authority remains unchanged:
@@ -25,6 +25,10 @@ That means:
 - use `Results`, `Advanced`, and `Service / Maintenance` as secondary surfaces
 - keep `Analyze` secondary until persisted-session review is useful
 - do not use the UI sequencing rule to move truth into `ui-shell`
+
+When `Experiment` reveals a missing capability, the minimum honest implementation lands in the owning backend package.
+Do not add speculative backend expansion for future pages.
+Early `Results`, `Advanced`, `Service / Maintenance`, and `Analyze` scaffolds do not change package authority.
 
 ## Approved Dependency Direction
 
@@ -100,6 +104,7 @@ These are acceptable:
 - thin view-model adapters that reshape authoritative state for server-rendered pages
 - minimal read-only storage and session-inspection helpers
 - fixture-backed or simulator-backed summaries used to make `Experiment` and `Results` reviewable
+- the smallest supporting secondary-surface shells needed to keep `Experiment` focused
 
 These are still not acceptable:
 - UI-authored run orchestration

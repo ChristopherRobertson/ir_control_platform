@@ -50,6 +50,7 @@ def create_simulator_runtime_map(storage_root: Path | None = None) -> dict[str, 
         runtimes[context.scenario_id] = SimulatorUiRuntime(
             scenario=context,
             coordinator=coordinator,
+            session_store=session_store,
             session_catalog=session_store,
             session_replayer=session_store,
             storage_root=base_root,

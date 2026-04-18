@@ -26,13 +26,14 @@ class MinimalBaselineSupportTests(unittest.TestCase):
         operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
 
         field_values = {field.name: field.value for field in operate_page.session_panel.fields}
+        self.assertEqual(field_values["session_id_input"], "saved-session-001")
         self.assertEqual(field_values["session_label"], "MIRcat 1850 cm^-1 baseline")
         self.assertEqual(field_values["sample_id"], "polymer-film-a12")
         self.assertEqual(
             field_values["operator_notes"],
             "Fixed MIRcat baseline with continuous HF2LI acquisition.",
         )
-        self.assertIn("session_id", field_values)
+        self.assertIn("recent_session_id", field_values)
         self.assertEqual(operate_page.session_panel.status_items, ())
         self.assertFalse(hasattr(operate_page, "recent_activity"))
         self.assertFalse(hasattr(operate_page, "live_status"))

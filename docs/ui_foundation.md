@@ -9,11 +9,11 @@ Use it for:
 - the route and page model
 - shared component and page-state expectations
 - presentation-plane boundary rules
-- the current UI development order
+- the current `Experiment`-first development order
 
 Pair it with:
 - `AGENTS.md` for product and architecture
-- `docs/operator_ui_mvp.md` for the next-pass UI target
+- `docs/operator_ui_mvp.md` for the current `Experiment` acceptance target
 - `docs/package_boundaries.md` for ownership and dependency direction
 - `EXPERIMENT.md` for supported v1 control semantics
 - `PLANS.md` for phase order
@@ -39,6 +39,7 @@ This UI must read as a task UI, not an architecture UI.
 The landing experience should make the default path obvious and keep advanced detail out of the way.
 
 The default operator experience centers on one `Experiment` page.
+`Experiment` is both the default route and the design driver for the current development loop.
 That workflow should emphasize:
 - session and sample identity
 - laser controls
@@ -52,6 +53,8 @@ Secondary surfaces carry the complexity that should not dominate the starting in
 - `Analyze`
 - `Advanced`
 - `Service / Maintenance`
+
+Those surfaces may exist early as supporting shells, but they remain subordinate while the `Experiment` workflow is still being iterated.
 
 Guarded calibrated assumptions belong in advanced or service-oriented expert surfaces, not in the default operator flow.
 
@@ -77,6 +80,7 @@ The current route model should use:
 
 Internal route spelling may change later. What may not change is the operator-facing framing:
 - `Experiment` is the default starting job
+- `Experiment` is the design driver for new UI work
 - advanced detail is progressive
 - service work is clearly separate
 - results and later analysis do not dominate the landing experience
@@ -94,6 +98,7 @@ The active foundation should support:
 - session and artifact summary cards
 
 Extend these pieces deliberately so the UI stays coherent as `Experiment`, `Results`, `Advanced`, and `Service / Maintenance` deepen.
+Extend them in response to `Experiment` iteration first, then promote stable patterns outward to secondary surfaces.
 
 ## UI Quality Rules
 - one screen = one job
@@ -130,15 +135,18 @@ Authority stays where it already belongs:
 
 ## Current Development Order
 The next UI work should proceed in this order:
-1. build the operator-first `Experiment` MVP
-2. deepen `Results` and recent-session review
-3. move expert detail into `Advanced` and `Service / Maintenance`
-4. wire backend actions in UI priority order
+1. refine the default `Experiment` workflow
+2. review the rendered operator flow
+3. add the minimum honest support needed in the owning backend package
+4. re-review `Experiment`
+5. deepen `Results`, `Advanced`, `Service / Maintenance`, and later `Analyze` only when the reviewed `Experiment` workflow proves the detail belongs there
 
 During the MVP pass, add only the minimum support required for honest rendering:
 - typed view-model adapters over authoritative state
 - minimal read-only helpers for session and storage inspection
 - fixture-backed or simulator-backed summaries when clearly labeled
+
+Secondary pages may exist early as supporting shells, but they do not become the sequencing authority for new work.
 
 Do not treat the UI pass as approval for:
 - speculative backend-first expansion

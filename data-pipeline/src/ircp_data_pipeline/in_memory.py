@@ -65,6 +65,15 @@ def _next_session_counter(manifests: Mapping[str, SessionManifest]) -> int:
     return highest
 
 
+def _normalize_session_id_input(session_id: str) -> str:
+    normalized = session_id.strip()
+    if not normalized:
+        raise ValueError("Session ID is required.")
+    if re.fullmatch(r"[A-Za-z0-9._-]+", normalized) is None:
+        raise ValueError("Session ID may contain only letters, numbers, dot, underscore, and hyphen.")
+    return normalized
+
+
 class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
     """Authoritative session store for the supported-v1 simulator slice."""
 
@@ -97,13 +106,19 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
         pico_capture_snapshot: PicoSecondaryCapture,
         pico_summary: PicoCaptureSummary,
         time_to_wavenumber_mapping: TimeToWavenumberMapping | None,
+        session_id: str | None = None,
         notes: tuple[str, ...] = (),
     ) -> SessionManifest:
-        self._counter += 1
+        if session_id is None:
+            self._counter += 1
+            resolved_session_id = f"session-{self._counter:03d}"
+        else:
+            resolved_session_id = _normalize_session_id_input(session_id)
+            if any(existing_id.casefold() == resolved_session_id.casefold() for existing_id in self._manifests):
+                raise ValueError(f"Session ID already exists: {resolved_session_id}")
         now = _utc_now()
-        session_id = f"session-{self._counter:03d}"
         manifest = SessionManifest(
-            session_id=session_id,
+            session_id=resolved_session_id,
             version=CONTRACT_VERSION,
             created_at=now,
             updated_at=now,
@@ -137,6 +152,17 @@ class InMemorySessionStore(SessionStore, SessionReplayer, SessionCatalog):
             notes=notes,
         )
         return self._store_manifest(manifest)
+
+    async def delete_session(self, session_id: str) -> None:
+        manifest = self._require_manifest(session_id)
+        del self._manifests[session_id]
+        payload_paths = [
+            artifact.relative_path
+            for artifact in (*manifest.raw_artifacts, *manifest.processing_outputs, *manifest.analysis_outputs, *manifest.export_artifacts)
+        ]
+        for relative_path in payload_paths:
+            self._raw_payloads_by_path.pop(relative_path, None)
+        self._rebuild_indexes()
 
     async def update_device_snapshots(
         self,

@@ -442,15 +442,28 @@ details > summary::-webkit-details-marker { display: none; }
 APP_SHELL_SCRIPT = """
 <script>
 (() => {
+  const fixedModeFieldNames = ["tune_target_cm1"];
+  const scanModeFieldNames = [
+    "scan_start_cm1",
+    "scan_stop_cm1",
+    "scan_step_size_cm1",
+  ];
   const pulseFieldNames = [
     "pulse_repetition_rate_hz",
     "pulse_width_ns",
     "pulse_duty_cycle_percent",
   ];
+  const fixedModeActionPaths = ["/experiment/laser/tune"];
+  const scanModeActionPaths = [
+    "/experiment/laser/scan/start",
+    "/experiment/laser/scan/stop",
+  ];
   const operatingModeFieldNames = [
+    "experiment_type",
     "emission_mode",
     "pulse_repetition_rate_hz",
     "pulse_width_ns",
+    "ndyag_continuous",
   ];
   const pulseRepetitionRateMinHz = 10;
   const pulseRepetitionRateMaxHz = 3000000;
@@ -542,29 +555,63 @@ APP_SHELL_SCRIPT = """
     }
   }
 
+  function syncFieldVisibility(form, fieldNames, visible) {
+    for (const fieldName of fieldNames) {
+      const wrapper = form.querySelector(`[data-field-name="${fieldName}"]`);
+      const input = form.querySelector(`[name="${fieldName}"]`);
+      if (wrapper instanceof HTMLElement) {
+        wrapper.hidden = !visible;
+      }
+      if (input instanceof HTMLInputElement ||
+          input instanceof HTMLSelectElement ||
+          input instanceof HTMLTextAreaElement) {
+        input.disabled = !visible;
+      }
+    }
+  }
+
+  function syncActionVisibility(form, actionPaths, visible) {
+    for (const actionPath of actionPaths) {
+      const wrapper = form.querySelector(`[data-action-button="${CSS.escape(actionPath)}"]`);
+      if (wrapper instanceof HTMLElement) {
+        wrapper.hidden = !visible;
+      }
+    }
+  }
+
+  function syncNdyagFields(form) {
+    const continuousInput = form.querySelector('input[name="ndyag_continuous"]');
+    const shotCountInput = form.querySelector('input[name="ndyag_shot_count"]');
+    if (!(continuousInput instanceof HTMLInputElement) ||
+        !(shotCountInput instanceof HTMLInputElement)) {
+      return;
+    }
+    const shotCountEnabled = !continuousInput.disabled && !continuousInput.checked;
+    shotCountInput.disabled = !shotCountEnabled;
+  }
+
   function syncOperatingModeFields(root = document) {
     const forms =
       root instanceof HTMLFormElement
         ? [root]
         : Array.from(root.querySelectorAll('form[data-async-form="true"]'));
     for (const form of forms) {
+      syncNdyagFields(form);
+      const experimentType = form.querySelector('select[name="experiment_type"]');
       const emissionMode = form.querySelector('select[name="emission_mode"]');
-      if (!emissionMode) {
+      if (!(experimentType instanceof HTMLSelectElement) || !(emissionMode instanceof HTMLSelectElement)) {
         continue;
       }
+      const wavelengthScan = experimentType.value === "wavelength_scan";
+      syncFieldVisibility(form, fixedModeFieldNames, !wavelengthScan);
+      syncFieldVisibility(form, scanModeFieldNames, wavelengthScan);
+      syncActionVisibility(form, fixedModeActionPaths, !wavelengthScan);
+      syncActionVisibility(form, scanModeActionPaths, wavelengthScan);
       const repetitionRateInput = form.querySelector('input[name="pulse_repetition_rate_hz"]');
       const pulseWidthInput = form.querySelector('input[name="pulse_width_ns"]');
       const dutyCycleInput = form.querySelector('input[name="pulse_duty_cycle_percent"]');
       const pulsed = emissionMode.value === "pulsed";
-        for (const fieldName of pulseFieldNames) {
-          const wrapper = form.querySelector(`[data-field-name="${fieldName}"]`);
-          const input = form.querySelector(`[name="${fieldName}"]`);
-          if (!wrapper || !input) {
-            continue;
-          }
-          wrapper.hidden = !pulsed;
-          input.disabled = !pulsed;
-        }
+      syncFieldVisibility(form, pulseFieldNames, pulsed);
       if (!(repetitionRateInput instanceof HTMLInputElement) ||
           !(pulseWidthInput instanceof HTMLInputElement) ||
           !(dutyCycleInput instanceof HTMLInputElement)) {
@@ -880,8 +927,9 @@ def render_action_button(button: ActionButtonModel, scenario_id: str) -> str:
     )
     helper = f'<span class="button-note">{escape(button.helper_text)}</span>' if button.helper_text else ""
     tone_class = "" if button.tone == "primary" else f" {escape(button.tone)}"
+    hidden_attr = " hidden" if button.hidden else ""
     return (
-        '<div>'
+        f'<div data-action-button="{escape(button.action)}"{hidden_attr}>'
         f'{hidden_fields}<button type="submit" formaction="{escape(button.action)}"'
         f' class="{tone_class.strip()}" {"disabled" if button.disabled else ""}>'
         f"{escape(button.label)}</button>{helper}</div>"

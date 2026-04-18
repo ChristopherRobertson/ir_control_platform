@@ -1,7 +1,7 @@
 # Operator UI MVP
 
 ## Purpose And Document Role
-This document defines the operator-facing outcome for the next implementation pass.
+This document defines the living operator-facing acceptance target for the current `Experiment` iteration loop.
 
 Use it with:
 - `AGENTS.md` for product and architecture
@@ -10,13 +10,14 @@ Use it with:
 - `docs/package_boundaries.md` for ownership and dependency rules
 - `EXPERIMENT.md` for supported v1 control semantics
 
-This is the active next-pass UI target.
+This is the active acceptance target for the default `Experiment` workflow.
 
 ## Desired Outcome
 The next real deliverable is a usable, reviewable, intuitive starting interface.
 
 The UI must become a task UI, not an architecture UI.
 The default operator experience centers on one `Experiment` page for the minimal baseline workflow.
+That page remains the design driver for the current development loop.
 
 The default page should answer:
 1. What do I do now?
@@ -36,8 +37,16 @@ The normal operator path is:
 
 This default path should feel like one job, not a tour of architecture surfaces.
 
+## Current Iteration Loop
+Use this document as the acceptance target for repeated `Experiment`-first review:
+1. refine the `Experiment` workflow
+2. review the rendered operator flow
+3. add the minimum honest support needed in the owning backend package
+4. re-review the `Experiment` workflow
+5. move stable detail outward only after it no longer belongs on the default page
+
 ## Minimum MVP Surface
-The next implementation pass should build a starting operator interface with these sections.
+The current `Experiment` loop should build and verify a starting operator interface with these sections.
 
 ### Session
 - session name
@@ -104,6 +113,7 @@ Complexity moves out of the default path and into secondary surfaces:
 - comparison and reprocessing work
 
 `Analyze` remains secondary until the default `Experiment` flow and basic results review are useful.
+These surfaces may exist as early scaffolds, but they remain subordinate to `Experiment` while the default workflow is still being iterated.
 
 ## Layered Development Approach
 
@@ -117,6 +127,24 @@ Move timing, routing, calibration, and service detail out of the default path.
 Wire real actions in priority order only after the operator-facing controls are in place and reviewed.
 
 The backend must follow the UI's needs. It must not lead them speculatively.
+
+## Promotion Rules
+
+### What Must Stay On `Experiment`
+- routine session identity and save or reopen actions
+- routine laser and HF2LI controls needed for normal operation
+- preflight, start, abort, run state, faults, warnings, and live operator context
+- the minimum status needed to answer “what do I do now?” and “what needs my attention?”
+
+### What Moves To Secondary Surfaces Once Stable
+- persisted-session review that no longer needs to stay on the default page
+- timing, routing, calibration, and service detail that is not part of routine operation
+- deeper artifact review, provenance inspection, and later scientific interpretation
+
+### What Is Explicitly Deferred Until `Experiment` Stabilizes
+- backend expansion added only for future pages
+- deeper processing, analysis, comparison, and report work
+- expert or service detail that would crowd the default operator flow
 
 ## UI Quality Rules
 - one screen = one job

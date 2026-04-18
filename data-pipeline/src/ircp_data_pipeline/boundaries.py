@@ -133,9 +133,13 @@ class SessionStore(Protocol):
         pico_capture_snapshot: PicoSecondaryCapture,
         pico_summary: PicoCaptureSummary,
         time_to_wavenumber_mapping: TimeToWavenumberMapping | None,
+        session_id: str | None = None,
         notes: tuple[str, ...] = (),
     ) -> SessionManifest:
         """Create the authoritative session record before run completion."""
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete one persisted session record and its artifacts."""
 
     async def update_device_snapshots(
         self,

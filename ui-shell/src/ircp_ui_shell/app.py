@@ -156,6 +156,7 @@ class IRCPUiApp:
             if path == "/experiment/session/save":
                 asyncio.run(
                     runtime.save_session(
+                        session_id=_extract_value(form, "session_id_input") or "",
                         session_label=_extract_value(form, "session_label") or "",
                         sample_id=_extract_value(form, "sample_id") or "",
                         operator_notes=_extract_value(form, "operator_notes") or "",
@@ -163,8 +164,12 @@ class IRCPUiApp:
                 )
                 return self._redirect(start_response, self._surface_location("experiment", scenario_id))
             if path == "/experiment/session/open":
-                session_id = _require_value(form, "session_id")
+                session_id = _require_value(form, "recent_session_id")
                 asyncio.run(runtime.open_saved_session(session_id))
+                return self._redirect(start_response, self._surface_location("experiment", scenario_id))
+            if path == "/experiment/session/delete":
+                session_id = _require_value(form, "recent_session_id")
+                asyncio.run(runtime.delete_saved_session(session_id))
                 return self._redirect(start_response, self._surface_location("experiment", scenario_id))
             if path == "/experiment/laser/connect":
                 asyncio.run(
@@ -305,7 +310,7 @@ class IRCPUiApp:
                         start_wavenumber_cm1=_require_float(form, "scan_start_cm1"),
                         end_wavenumber_cm1=_require_float(form, "scan_stop_cm1"),
                         step_size_cm1=_require_float(form, "scan_step_size_cm1"),
-                        dwell_time_ms=_require_float(form, "scan_dwell_time_ms"),
+                        dwell_time_ms=_optional_float(form, "scan_dwell_time_ms"),
                     )
                 )
                 return self._redirect(start_response, self._surface_location("experiment", scenario_id))

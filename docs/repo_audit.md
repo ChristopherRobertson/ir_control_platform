@@ -1,10 +1,13 @@
 # Repository Audit
 
+Historical context only: this audit captures an earlier pre-implementation checkpoint.
+Use `PLANS.md` for the active development sequence and current priorities.
+
 ## Scope
 
 - `Control_System` was inspected as reference-only legacy material. It was not modified.
 - `ir_control_platform` remains the only valid implementation target.
-- Phase 1 stays documentation-only. No package scaffolding, driver work, or UI feature work was performed.
+- This audit reflects an earlier checkpoint when Phase 1 was documentation-only and no package scaffolding, driver work, or UI feature work had been performed yet.
 - Classifications in this audit use `KEEP`, `REWRITE`, and `DELETE / DISCARD`.
 
 ## Current workspace state
@@ -14,9 +17,9 @@
 | `Control_System` | Active legacy implementation with mixed UI, orchestration, persistence, and hardware logic | 75 source files across `frontend/src`, `backend/src`, `backend/scripts`, and `tools` | Use as salvage input only. Do not preserve structure. |
 | `Control_System/docs` | Vendor SDKs, manuals, screenshots, and reference notes | `docs/sdks/*`, `docs/manuals/*`, `docs/gui_screenshots/*` | Strong salvage source for drivers, simulators, and validation. |
 | `Control_System/data` and `Control_System/backend/data` | Real run outputs, raw captures, and converted artifacts | `data/*.csv`, `data/*.txt`, `backend/data/raw/*.txt`, `backend/data/converted/*.txt` | Primary fixture source for replay, import, processing, and e2e. |
-| `ir_control_platform` | Documentation-and-boundaries skeleton only | 19 non-`.git` files, all of them repo docs, package `AGENTS.md` files, and Phase 1 docs | Phase 2 must start with contracts and scaffolding because no product code exists yet. |
-| `ir_control_platform` boundary status | No implementation files to violate package rules yet | `architecture-boundary-guard` scan reported `Scanned 0 files` and `Blocking findings: 0` | Architecture is still clean, but only because implementation has not started. |
-| `ir_control_platform` provenance status | No session/artifact implementation exists yet | `check_session_artifacts.py --root ir_control_platform` returned `ok: true` with no issues | Provenance rules still need actual implementation in later phases. |
+| `ir_control_platform` | Documentation-and-boundaries skeleton at the time of this audit | 19 non-`.git` files, all of them repo docs, package `AGENTS.md` files, and Phase 1 docs | This historical snapshot explains why early contracts and scaffolding work were prioritized. |
+| `ir_control_platform` boundary status | No implementation files to violate package rules at the time of this audit | `architecture-boundary-guard` scan reported `Scanned 0 files` and `Blocking findings: 0` | This historical snapshot predates implementation and should not be read as current repo state. |
+| `ir_control_platform` provenance status | No session/artifact implementation existed yet at the time of this audit | `check_session_artifacts.py --root ir_control_platform` returned `ok: true` with no issues | This historical snapshot predates later persistence work. |
 
 ## Current legacy architecture
 
@@ -119,8 +122,8 @@ flowchart LR
 | Area | Current state | Audit conclusion |
 |---|---|---|
 | `contracts`, `platform`, `drivers`, `experiment-engine`, `data-pipeline`, `processing`, `analysis`, `ui-shell`, `reports`, `simulators`, `e2e` | Directory placeholders plus package `AGENTS.md` files only | Package boundaries are defined, but no code exists yet. |
-| `docs` | Phase 1 audit set already existed and has now been revalidated against both repositories | Keep updating in place until implementation begins. |
-| Root docs | `AGENTS.md`, `REFACTOR.md`, and `PLANS.md` are present and aligned with the migration workspace rules | Enough governance exists to start Phase 2 after this audit. |
+| `docs` | Phase 1 audit set already existed and had been revalidated against both repositories at the time of this audit | Historical reference set only; current sequencing now lives in `PLANS.md`. |
+| Root docs | `AGENTS.md`, `REFACTOR.md`, and `PLANS.md` were present and aligned with the migration workspace rules | Historical governance checkpoint only; current direction is defined by the active docs. |
 
 ## Dependency map and hidden coupling
 

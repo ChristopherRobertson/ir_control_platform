@@ -4,11 +4,11 @@
 Use the repository documents this way:
 
 - `AGENTS.md` defines the required product outcome and fixed architecture.
-- `docs/operator_ui_mvp.md` defines the active next-pass UI target.
+- `docs/operator_ui_mvp.md` defines the active `Experiment` acceptance target.
 - `docs/ui_foundation.md` defines the active UI-shell rules.
 - `docs/package_boundaries.md` defines package ownership and dependency direction.
 - `REFACTOR.md` defines what may be salvaged, rewritten, deleted, or retired during the migration.
-- `PLANS.md` defines the active development sequence.
+- `PLANS.md` defines the only active development sequence.
 
 ## Purpose
 This document governs how the current codebase is replaced while preserving the architecture already established in `ir_control_platform`.
@@ -38,8 +38,8 @@ Active rewrite decisions:
 - Do not preserve the current UI architecture.
 - Do not preserve UI ownership of orchestration, persistence, processing, or analysis.
 - Preserve the control-plane and data-plane split already established in `ir_control_platform`.
-- Build the next implementation pass around the operator-first UI MVP in `docs/operator_ui_mvp.md`.
-- Let backend work follow validated UI needs instead of speculative expansion.
+- Use iterative refinement of the default `Experiment` surface as the sequencing authority for new work.
+- Let supporting backend work and secondary surfaces follow reviewed `Experiment` needs instead of advancing independently.
 - Remove obsolete phase-tied and workflow-map guidance once active guidance replaces it.
 
 ## Non-negotiable Rewrite Rules
@@ -104,18 +104,20 @@ Use `PLANS.md` for the authoritative phase order. The rewrite sequence is:
 
 1. Documentation reset
    Remove conflicting guidance and establish one active operator-first path.
-2. Operator-first UI MVP
-   Build the default `Operate` experience first.
-3. Results and review
-   Make recent sessions and persisted summaries reviewable.
-4. Advanced and service surfaces
-   Move timing, routing, calibration, and recovery detail out of the default path.
+2. Experiment-first iteration
+   Build and repeatedly refine the default `Experiment` experience first.
+3. Results and review promotion
+   Promote recent sessions and persisted summaries outward only after the reviewed `Experiment` workflow proves they belong on a secondary surface.
+4. Advanced and service extraction
+   Move timing, routing, calibration, and recovery detail out of the default path once routine operation is stable.
 5. Incremental backend wiring
-   Wire real actions in UI priority order only where the reviewed UI proves they are needed.
+   Wire and harden real actions in UI priority order only where the reviewed `Experiment` workflow proves they are needed.
 6. Real-device hardening
    Validate the minimum supported hardware flows and explicit failure behavior.
 7. Deeper processing and analysis
    Expand processing and analysis only after the operator-facing UI has been validated.
+
+Partial secondary-surface scaffolds may exist early, but they remain subordinate to the `Experiment` workflow during active iteration.
 
 ## Deletion Rules
 Delete or retire these when active replacements exist:

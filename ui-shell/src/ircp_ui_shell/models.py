@@ -139,6 +139,7 @@ class ActionButtonModel:
     action: str
     tone: str = "primary"
     disabled: bool = False
+    hidden: bool = False
     helper_text: str = ""
     hidden_fields: tuple[tuple[str, str], ...] = ()
 

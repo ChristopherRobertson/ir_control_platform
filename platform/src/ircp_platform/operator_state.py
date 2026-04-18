@@ -30,6 +30,8 @@ PULSE_WIDTH_MAX_NS = 1005.0
 PULSE_DUTY_CYCLE_MAX_PERCENT = 30.0
 MIRCAT_WAVENUMBER_MIN_CM1 = 1638.8
 MIRCAT_WAVENUMBER_MAX_CM1 = 2077.3
+SCAN_SPEED_MIN = 0.1
+SCAN_SPEED_MAX = 10_000.0
 NDYAG_REPETITION_RATE_MIN_HZ = 10.0
 NDYAG_SHOT_COUNT_MAX = 100
 HF2_DIO_0 = "dio_0"
@@ -40,6 +42,7 @@ HF2_DIO_SELECTIONS = (HF2_DIO_0, HF2_DIO_1, HF2_DIO_0_1)
 
 @dataclass
 class OperatorDraftState:
+    session_id_input: str
     session_label: str
     sample_id: str
     operator_notes: str
@@ -79,6 +82,7 @@ def create_operator_draft(scenario: SimulatorScenarioContext) -> OperatorDraftSt
         initial_pulse_width_ns,
     )
     return OperatorDraftState(
+        session_id_input="session-001",
         session_label=scenario.recipe.session_label or "MIRcat 1850 cm^-1 baseline",
         sample_id="polymer-film-a12",
         operator_notes="Fixed MIRcat baseline with continuous HF2LI acquisition.",
@@ -87,7 +91,7 @@ def create_operator_draft(scenario: SimulatorScenarioContext) -> OperatorDraftSt
         tune_target_cm1=normalize_wavenumber_cm1(default_tune_target(scenario)),
         scan_start_cm1=normalize_wavenumber_cm1(default_scan_start(scenario)),
         scan_stop_cm1=normalize_wavenumber_cm1(default_scan_stop(scenario)),
-        scan_step_size_cm1=1.0,
+        scan_step_size_cm1=normalize_scan_speed(1.0),
         scan_dwell_time_ms=250.0,
         pulse_repetition_rate_hz=initial_pulse_rate_hz,
         pulse_width_ns=initial_pulse_width_ns,
@@ -197,6 +201,7 @@ def build_session_notes(
     scenario: SimulatorScenarioContext,
 ) -> tuple[str, ...]:
     return (
+        f"session_id_input:{draft.session_id_input}",
         f"sample_id:{draft.sample_id}",
         f"operator_notes:{draft.operator_notes}",
         f"experiment_type:{draft.experiment_type}",
@@ -218,6 +223,7 @@ def apply_manifest_to_draft(
     manifest: SessionManifest,
     scenario: SimulatorScenarioContext,
 ) -> None:
+    draft.session_id_input = manifest.session_id
     draft.session_label = manifest.recipe_snapshot.session_label or draft.session_label
     draft.sample_id = note_value(manifest.notes, "sample_id") or draft.sample_id
     draft.operator_notes = note_value(manifest.notes, "operator_notes") or draft.operator_notes
@@ -261,7 +267,9 @@ def apply_manifest_to_draft(
         draft.scan_stop_cm1 = normalize_wavenumber_cm1(
             manifest.recipe_snapshot.mircat.step_measure_scan.end_wavenumber_cm1
         )
-        draft.scan_step_size_cm1 = manifest.recipe_snapshot.mircat.step_measure_scan.step_size_cm1
+        draft.scan_step_size_cm1 = normalize_scan_speed(
+            manifest.recipe_snapshot.mircat.step_measure_scan.step_size_cm1
+        )
         draft.scan_dwell_time_ms = manifest.recipe_snapshot.mircat.step_measure_scan.dwell_time_ms
 
 
@@ -341,6 +349,10 @@ def experiment_type_from_spectral_mode(spectral_mode: MircatSpectralMode) -> Exp
 
 def normalize_wavenumber_cm1(wavenumber_cm1: float) -> float:
     return min(max(wavenumber_cm1, MIRCAT_WAVENUMBER_MIN_CM1), MIRCAT_WAVENUMBER_MAX_CM1)
+
+
+def normalize_scan_speed(scan_speed: float) -> float:
+    return min(max(scan_speed, SCAN_SPEED_MIN), SCAN_SPEED_MAX)
 
 
 def calculate_duty_cycle_percent(pulse_repetition_rate_hz: float, pulse_width_ns: float) -> float:

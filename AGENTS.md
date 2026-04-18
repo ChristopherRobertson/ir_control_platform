@@ -5,11 +5,11 @@ Use the repository documents this way:
 
 - `AGENTS.md` defines the product, fixed architecture, and active guidance set.
 - `EXPERIMENT.md` defines the supported v1 experiment model and control semantics.
-- `docs/operator_ui_mvp.md` defines the desired operator-facing outcome for the next implementation pass.
+- `docs/operator_ui_mvp.md` defines the current acceptance target for the `Experiment` workflow.
 - `docs/ui_foundation.md` defines the active Python, server-rendered UI shell rules.
 - `docs/package_boundaries.md` defines package ownership and dependency direction.
 - `REFACTOR.md` defines what may be salvaged, rewritten, or deleted during the migration.
-- `PLANS.md` defines the active development sequence.
+- `PLANS.md` defines the only active development sequence.
 - Package-level `AGENTS.md` files refine local implementation rules.
 - Historical reference docs such as `docs/repo_audit.md`, `docs/salvage_matrix.md`, `docs/migration_notes.md`, `docs/legacy_to_target_mapping.md`, and `docs/risk_register.md` are reference only. They do not set the current plan.
 
@@ -62,18 +62,21 @@ It should hide deeper detail by default and move it into secondary surfaces:
 Guarded calibrated assumptions are expert-only content. They may exist as dedicated advanced or service sub-surfaces, but they are not the starting operator interface.
 
 ## Active Development Direction
-The next implementation pass is not:
+The active development loop is not:
 - deeper processing or analysis work
 - architecture expansion for its own sake
 - exhaustive hardware or service coverage
 - a giant shell full of internal system information
 
-The next implementation pass is:
-- a stripped-down operator-first UI MVP
+The active development loop is:
+- iterative refinement of the default `Experiment` surface
 - a simple default landing experience
 - minimum controls for normal operation
 - progressive disclosure for advanced detail
-- short review loops that shape the next backend wiring work
+- short review loops that shape supporting backend work and secondary surfaces
+
+Supporting backend work and secondary surfaces follow reviewed `Experiment` needs.
+They do not advance independently of the default operator workflow.
 
 ## End-State Product Areas
 The finished product should read as:
@@ -112,7 +115,7 @@ Variation belongs in contracts, presets, drivers, processing recipes, and analys
 
 ## Instruction Boundary
 Use this file to preserve the required product outcome and fixed architecture.
-Use `docs/operator_ui_mvp.md` for the next-pass UI target.
+Use `docs/operator_ui_mvp.md` for the current `Experiment` acceptance target.
 Use `docs/ui_foundation.md` for active UI-shell rules.
 Use `REFACTOR.md` for migration constraints.
 Use `PLANS.md` for development order.

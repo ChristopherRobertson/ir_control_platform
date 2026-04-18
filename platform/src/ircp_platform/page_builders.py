@@ -46,6 +46,8 @@ from .operator_state import (
     PULSE_REPETITION_RATE_MIN_HZ,
     PULSE_WIDTH_MAX_NS,
     PULSE_WIDTH_MIN_NS,
+    SCAN_SPEED_MAX,
+    SCAN_SPEED_MIN,
     WAVELENGTH_SCAN_EXPERIMENT_TYPE,
     experiment_type_label,
 )
@@ -404,6 +406,12 @@ def _build_session_panel(
                 value=draft.sample_id,
             ),
             FormFieldModel(
+                name="session_id_input",
+                label="ID",
+                field_type="text",
+                value=draft.session_id_input,
+            ),
+            FormFieldModel(
                 name="operator_notes",
                 label="Notes",
                 field_type="textarea",
@@ -411,7 +419,7 @@ def _build_session_panel(
                 full_width=True,
             ),
             FormFieldModel(
-                name="session_id",
+                name="recent_session_id",
                 label="Open Recent",
                 field_type="select",
                 options=recent_session_options,
@@ -419,13 +427,19 @@ def _build_session_panel(
                 full_width=True,
             ),
         ),
-        field_columns=2,
+        field_columns=3,
         actions=(
             ActionButtonModel(label="Save Session", action="/experiment/session/save"),
             ActionButtonModel(
                 label="Open Recent",
                 action="/experiment/session/open",
                 tone="secondary",
+                disabled=not bool(recent_session_options),
+            ),
+            ActionButtonModel(
+                label="Delete Session",
+                action="/experiment/session/delete",
+                tone="danger",
                 disabled=not bool(recent_session_options),
             ),
         ),
@@ -436,6 +450,8 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
     armed = bool_vendor_status(status, "armed")
     emission = bool_vendor_status(status, "emission_enabled")
     scan_active = bool_vendor_status(status, "scan_active")
+    fixed_mode = draft.experiment_type == FIXED_WAVELENGTH_EXPERIMENT_TYPE
+    pulsed_mode = draft.emission_mode.value == "pulsed"
     mode_fields = (
         FormFieldModel(
             name="experiment_type",
@@ -453,7 +469,6 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
                     selected=draft.experiment_type == WAVELENGTH_SCAN_EXPERIMENT_TYPE,
                 ),
             ),
-            auto_submit=True,
         ),
         FormFieldModel(
             name="emission_mode",
@@ -472,12 +487,11 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
             field_type="number",
             value=f"{draft.pulse_repetition_rate_hz:.0f}",
             help_text=f"{PULSE_REPETITION_RATE_MIN_HZ:.0f} Hz to {PULSE_REPETITION_RATE_MAX_HZ:,.0f} Hz",
-            disabled=draft.emission_mode.value != "pulsed",
-            hidden=draft.emission_mode.value != "pulsed",
+            disabled=not pulsed_mode,
+            hidden=not pulsed_mode,
             min_value=f"{PULSE_REPETITION_RATE_MIN_HZ:.0f}",
             max_value=f"{PULSE_REPETITION_RATE_MAX_HZ:.0f}",
             step="1",
-            auto_submit=True,
         ),
         FormFieldModel(
             name="pulse_width_ns",
@@ -485,12 +499,11 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
             field_type="number",
             value=f"{draft.pulse_width_ns:.0f}",
             help_text=f"{PULSE_WIDTH_MIN_NS:.0f} ns to {PULSE_WIDTH_MAX_NS:.0f} ns, duty cycle max {PULSE_DUTY_CYCLE_MAX_PERCENT:.0f}%",
-            disabled=draft.emission_mode.value != "pulsed",
-            hidden=draft.emission_mode.value != "pulsed",
+            disabled=not pulsed_mode,
+            hidden=not pulsed_mode,
             min_value=f"{PULSE_WIDTH_MIN_NS:.0f}",
             max_value=f"{PULSE_WIDTH_MAX_NS:.0f}",
             step="1",
-            auto_submit=True,
         ),
         FormFieldModel(
             name="pulse_duty_cycle_percent",
@@ -498,8 +511,8 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
             field_type="number",
             value=f"{draft.pulse_duty_cycle_percent:.3f}",
             help_text=f"Derived from repetition rate x pulse width, max {PULSE_DUTY_CYCLE_MAX_PERCENT:.0f}%",
-            disabled=draft.emission_mode.value != "pulsed",
-            hidden=draft.emission_mode.value != "pulsed",
+            disabled=not pulsed_mode,
+            hidden=not pulsed_mode,
             read_only=True,
             max_value=f"{PULSE_DUTY_CYCLE_MAX_PERCENT:.0f}",
             step="0.001",
@@ -515,7 +528,8 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
             min_value=f"{MIRCAT_WAVENUMBER_MIN_CM1:.1f}",
             max_value=f"{MIRCAT_WAVENUMBER_MAX_CM1:.1f}",
             step="0.1",
-            auto_submit=True,
+            disabled=not fixed_mode,
+            hidden=not fixed_mode,
         ),
     )
     scan_fields = (
@@ -528,7 +542,8 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
             min_value=f"{MIRCAT_WAVENUMBER_MIN_CM1:.1f}",
             max_value=f"{MIRCAT_WAVENUMBER_MAX_CM1:.1f}",
             step="0.1",
-            auto_submit=True,
+            disabled=fixed_mode,
+            hidden=fixed_mode,
         ),
         FormFieldModel(
             name="scan_stop_cm1",
@@ -539,32 +554,35 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
             min_value=f"{MIRCAT_WAVENUMBER_MIN_CM1:.1f}",
             max_value=f"{MIRCAT_WAVENUMBER_MAX_CM1:.1f}",
             step="0.1",
-            auto_submit=True,
+            disabled=fixed_mode,
+            hidden=fixed_mode,
         ),
         FormFieldModel(
             name="scan_step_size_cm1",
-            label="Step size (cm^-1)",
+            label="Scan Speed",
             field_type="number",
             value=f"{draft.scan_step_size_cm1:.2f}",
-            auto_submit=True,
-        ),
-        FormFieldModel(
-            name="scan_dwell_time_ms",
-            label="Dwell time per point (ms)",
-            field_type="number",
-            value=f"{draft.scan_dwell_time_ms:.0f}",
-            auto_submit=True,
+            help_text=f"{SCAN_SPEED_MIN:.1f} to {SCAN_SPEED_MAX:.0f}",
+            min_value=f"{SCAN_SPEED_MIN:.1f}",
+            max_value=f"{SCAN_SPEED_MAX:.0f}",
+            step="0.1",
+            disabled=fixed_mode,
+            hidden=fixed_mode,
         ),
     )
+    visible_mode_fields = fixed_fields if fixed_mode else scan_fields
+    hidden_mode_fields = scan_fields if fixed_mode else fixed_fields
+    visible_pulse_fields = pulse_fields if pulsed_mode else ()
+    hidden_pulse_fields = () if pulsed_mode else pulse_fields
     return OperatePanelModel(
         title="MIRcat",
         form_action="/experiment/laser/configure",
         fields=(
             *mode_fields,
-            *(fixed_fields if draft.experiment_type == FIXED_WAVELENGTH_EXPERIMENT_TYPE else scan_fields),
-            *(pulse_fields if draft.emission_mode.value == "pulsed" else ()),
+            *visible_mode_fields,
+            *visible_pulse_fields,
         ),
-        conditional_fields=() if draft.emission_mode.value == "pulsed" else pulse_fields,
+        conditional_fields=(*hidden_mode_fields, *hidden_pulse_fields),
         field_columns=2,
         header_actions=(
             ActionButtonModel(
@@ -580,24 +598,24 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
                 tone="danger" if armed else "secondary",
                 disabled=not status.connected,
             ),
-            *(
-                (
-                    ActionButtonModel("Tune", "/experiment/laser/tune", disabled=not status.connected),
-                )
-                if draft.experiment_type == FIXED_WAVELENGTH_EXPERIMENT_TYPE
-                else (
-                    ActionButtonModel(
-                        "Start Scan",
-                        "/experiment/laser/scan/start",
-                        disabled=not status.connected,
-                    ),
-                    ActionButtonModel(
-                        "Stop Scan",
-                        "/experiment/laser/scan/stop",
-                        tone="danger",
-                        disabled=not status.connected or not scan_active,
-                    ),
-                )
+            ActionButtonModel(
+                "Tune",
+                "/experiment/laser/tune",
+                disabled=not status.connected,
+                hidden=not fixed_mode,
+            ),
+            ActionButtonModel(
+                "Start Scan",
+                "/experiment/laser/scan/start",
+                disabled=not status.connected,
+                hidden=fixed_mode,
+            ),
+            ActionButtonModel(
+                "Stop Scan",
+                "/experiment/laser/scan/stop",
+                tone="danger",
+                disabled=not status.connected or not scan_active,
+                hidden=fixed_mode,
             ),
             ActionButtonModel(
                 "Emission Off" if emission else "Emission On",
@@ -649,7 +667,6 @@ def _build_ndyag_panel(draft: OperatorDraftState) -> OperatePanelModel:
                 min_value=f"{NDYAG_REPETITION_RATE_MIN_HZ:.0f}",
                 step="1",
                 disabled=not draft.ndyag_enabled,
-                auto_submit=True,
             ),
             FormFieldModel(
                 name="ndyag_shot_count",
@@ -660,7 +677,6 @@ def _build_ndyag_panel(draft: OperatorDraftState) -> OperatePanelModel:
                 max_value=str(NDYAG_SHOT_COUNT_MAX),
                 step="1",
                 disabled=not draft.ndyag_enabled or draft.ndyag_continuous,
-                auto_submit=True,
             ),
             FormFieldModel(
                 name="ndyag_continuous",
@@ -668,7 +684,6 @@ def _build_ndyag_panel(draft: OperatorDraftState) -> OperatePanelModel:
                 field_type="checkbox",
                 checked=draft.ndyag_continuous,
                 disabled=not draft.ndyag_enabled,
-                auto_submit=True,
             ),
         ),
     )
@@ -695,35 +710,30 @@ def _build_acquisition_panel(draft: OperatorDraftState, status: DeviceStatus) ->
                 label="Order",
                 field_type="number",
                 value=str(draft.hf2_harmonic),
-                auto_submit=True,
             ),
             FormFieldModel(
                 name="hf2_time_constant_seconds",
                 label="Time constant (s)",
                 field_type="number",
                 value=f"{draft.hf2_time_constant_seconds:.3f}",
-                auto_submit=True,
             ),
             FormFieldModel(
                 name="hf2_sample_rate_hz",
                 label="Transfer Rate",
                 field_type="number",
                 value=f"{draft.hf2_sample_rate_hz:.0f}",
-                auto_submit=True,
             ),
             FormFieldModel(
                 name="hf2_extref",
                 label="ExtRef",
                 field_type="select",
                 options=dio_options,
-                auto_submit=True,
             ),
             FormFieldModel(
                 name="hf2_trigger",
                 label="Trigger",
                 field_type="select",
                 options=trigger_options,
-                auto_submit=True,
             ),
         ),
         header_actions=(

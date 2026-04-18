@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 
 from ircp_contracts import (
     DeviceConfiguration,
@@ -16,7 +17,7 @@ from ircp_contracts import (
     RunState,
     SessionManifest,
 )
-from ircp_data_pipeline import SessionCatalog, SessionOpenRequest, SessionReplayer
+from ircp_data_pipeline import SessionCatalog, SessionOpenRequest, SessionReplayer, SessionStore
 from ircp_experiment_engine import SupportedV1DriverBundle
 from ircp_experiment_engine.runtime import InMemoryRunCoordinator, SupportedV1PreflightValidator
 from ircp_simulators import SimulatorScenarioContext
@@ -46,6 +47,7 @@ from .operator_state import (
     normalize_ndyag_shot_count,
     normalize_experiment_type,
     normalize_pulse_parameters,
+    normalize_scan_speed,
     normalize_wavenumber_cm1,
 )
 from .page_builders import (
@@ -71,12 +73,14 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         *,
         scenario: SimulatorScenarioContext,
         coordinator: InMemoryRunCoordinator,
+        session_store: SessionStore,
         session_catalog: SessionCatalog,
         session_replayer: SessionReplayer,
         storage_root: Path,
     ) -> None:
         self._scenario = scenario
         self._coordinator = coordinator
+        self._session_store = session_store
         self._session_catalog = session_catalog
         self._session_replayer = session_replayer
         self._preflight_validator = SupportedV1PreflightValidator()
@@ -199,7 +203,7 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         if scan_stop_cm1 is not None:
             self._draft.scan_stop_cm1 = normalize_wavenumber_cm1(scan_stop_cm1)
         if scan_step_size_cm1 is not None:
-            self._draft.scan_step_size_cm1 = scan_step_size_cm1
+            self._draft.scan_step_size_cm1 = normalize_scan_speed(scan_step_size_cm1)
         if scan_dwell_time_ms is not None:
             self._draft.scan_dwell_time_ms = scan_dwell_time_ms
         if pulse_repetition_rate_hz is not None:
@@ -261,12 +265,16 @@ class SimulatorUiRuntime(UiRuntimeGateway):
 
     async def save_session(
         self,
+        session_id: str,
         session_label: str,
         sample_id: str,
         operator_notes: str,
     ) -> SessionManifest:
+        session_id_value = session_id.strip()
         session_label_value = session_label.strip()
         sample_id_value = sample_id.strip()
+        if session_id_value:
+            self._draft.session_id_input = session_id_value
         if session_label_value:
             self._draft.session_label = session_label_value
         if sample_id_value:
@@ -275,12 +283,26 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         manifest = await self._coordinator.create_session(
             self._current_recipe(),
             self._scenario.preset,
+            session_id=self._draft.session_id_input,
             notes=build_session_notes(self._draft, self._scenario),
         )
+        self._draft.session_id_input = manifest.session_id
         self._draft_session_id = manifest.session_id
         self._selected_session_id = manifest.session_id
         self._mark_preflight_dirty()
         return manifest
+
+    async def delete_saved_session(self, session_id: str) -> None:
+        await self._session_store.delete_session(session_id)
+        session_dir = self._storage_root / "sessions" / session_id
+        if session_dir.exists():
+            shutil.rmtree(session_dir)
+        if self._draft_session_id == session_id:
+            self._draft_session_id = None
+        if self._selected_session_id == session_id:
+            sessions = await self._session_catalog.list_sessions()
+            self._selected_session_id = sessions[0].session_id if sessions else None
+        self._mark_preflight_dirty()
 
     async def open_saved_session(self, session_id: str) -> SessionManifest:
         result = await self._session_replayer.open_session(
@@ -335,13 +357,14 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         start_wavenumber_cm1: float,
         end_wavenumber_cm1: float,
         step_size_cm1: float,
-        dwell_time_ms: float,
+        dwell_time_ms: float | None = None,
     ) -> DeviceStatus:
         self._draft.experiment_type = WAVELENGTH_SCAN_EXPERIMENT_TYPE
         self._draft.scan_start_cm1 = normalize_wavenumber_cm1(start_wavenumber_cm1)
         self._draft.scan_stop_cm1 = normalize_wavenumber_cm1(end_wavenumber_cm1)
-        self._draft.scan_step_size_cm1 = step_size_cm1
-        self._draft.scan_dwell_time_ms = dwell_time_ms
+        self._draft.scan_step_size_cm1 = normalize_scan_speed(step_size_cm1)
+        if dwell_time_ms is not None:
+            self._draft.scan_dwell_time_ms = dwell_time_ms
         status = await self._scenario.bundle.mircat.start_recipe(
             build_mircat_configuration(self._draft, self._scenario),
             self._scenario.recipe.probe_timing_mode,
@@ -389,6 +412,7 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         session_id = self._draft_session_id
         if session_id is None:
             manifest = await self.save_session(
+                self._draft.session_id_input,
                 self._draft.session_label,
                 self._draft.sample_id,
                 self._draft.operator_notes,

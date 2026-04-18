@@ -85,8 +85,18 @@ class UiCommandService(Protocol):
         """Turn the Nd:YAG draft control on or off."""
         ...
 
-    async def save_session(self, session_label: str, sample_id: str, operator_notes: str) -> SessionManifest:
+    async def save_session(
+        self,
+        session_id: str,
+        session_label: str,
+        sample_id: str,
+        operator_notes: str,
+    ) -> SessionManifest:
         """Persist a planned session using the current draft recipe."""
+        ...
+
+    async def delete_saved_session(self, session_id: str) -> None:
+        """Delete one saved session and remove it from reopen workflows."""
         ...
 
     async def open_saved_session(self, session_id: str) -> SessionManifest:
@@ -123,7 +133,7 @@ class UiCommandService(Protocol):
         start_wavenumber_cm1: float,
         end_wavenumber_cm1: float,
         step_size_cm1: float,
-        dwell_time_ms: float,
+        dwell_time_ms: float | None = None,
     ) -> DeviceStatus:
         """Start the current MIRcat scan recipe using the reviewed operator-facing scan fields."""
         ...

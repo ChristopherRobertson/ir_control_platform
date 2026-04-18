@@ -9,6 +9,7 @@ from enum import Enum
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import types
@@ -191,6 +192,14 @@ class FilesystemSessionStore(InMemorySessionStore):
     async def create_session_manifest(self, *args, **kwargs) -> SessionManifest:
         self._reload_from_disk()
         return await super().create_session_manifest(*args, **kwargs)
+
+    async def delete_session(self, session_id: str) -> None:
+        self._reload_from_disk()
+        await super().delete_session(session_id)
+        session_dir = self._session_dir(session_id)
+        if session_dir.exists():
+            shutil.rmtree(session_dir)
+        self._reload_from_disk()
 
     async def load_session(self, session_id: str) -> SessionManifest:
         self._reload_from_disk()

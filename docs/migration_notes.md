@@ -1,9 +1,12 @@
 # Migration Notes
 
+Historical context only: these notes capture an earlier migration checkpoint.
+Use `PLANS.md` for the active development sequence and current priorities.
+
 ## Working assumptions
 
 - `Control_System` remains reference-only for the entire migration.
-- `ir_control_platform` is still a boundaries-and-docs skeleton and must stay architecture-first as implementation begins.
+- At the time these notes were captured, `ir_control_platform` was still a boundaries-and-docs skeleton and needed architecture-first scaffolding before implementation.
 - The new system is single-path and fail-fast.
 - Vendor status, vendor error codes, explicit validation, and replayable artifacts matter more than preserving legacy UI behavior.
 
@@ -55,11 +58,13 @@
 - The new session model must record enough metadata that future processing does not need to read live MIRcat state to recover the axis.
 - Unsupported historical layouts should fail explicitly with a clear import error; they should not be silently coerced.
 
-## Recommended next milestone
+## Historical Next Milestone At Time Of Audit
 
-The next milestone should be `Phase 2 — Contracts and package scaffolding`, explicitly sized around the MIRcat plus HF2LI golden path identified in Phase 1.
+This section is retained for context only.
+It reflects what the migration notes recommended at the time they were written.
+Current sequencing now lives in `PLANS.md`.
 
-### Recommended Phase 2 scope
+### Historical Phase 2 scope
 
 1. Scaffold `contracts`, `platform`, `drivers`, `experiment-engine`, `data-pipeline`, `processing`, `analysis`, `ui-shell`, `simulators`, and `e2e`.
 2. Define canonical contracts for recipes, device status and faults, readiness issues, run state, run events, session manifests, and artifact manifests.
@@ -67,14 +72,14 @@ The next milestone should be `Phase 2 — Contracts and package scaffolding`, ex
 4. Define one run command surface: preflight, start, stop, abort, and explicit failure reasons.
 5. Define session and artifact ownership so raw capture, processed outputs, analysis outputs, and exports are separate and traceable.
 
-### Recommended non-goals for Phase 2
+### Historical non-goals for that checkpoint
 
 - No product UI features beyond route and state scaffolds.
 - No direct real-device bench integration work beyond contract design inputs.
 - No Pico, Highland, Arduino MUX, or Continuum implementation unless a new blocker proves one of them is mandatory for the first slice.
 - No compatibility layer, legacy bridge, or mirrored source tree from `Control_System`.
 
-### Phase 2 exit criteria
+### Historical exit criteria for that checkpoint
 
 - Downstream work can compile against stable package boundaries and contracts.
 - The first simulator-backed vertical slice is fully specified.

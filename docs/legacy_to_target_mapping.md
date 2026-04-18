@@ -1,6 +1,10 @@
 # Legacy to Target Mapping
 
-This document maps the useful parts of `Control_System` into the target package boundaries defined by `ir_control_platform`. It is package-first rather than screen-first so the next phase can implement boundaries before features.
+Historical context only: this mapping captures migration inputs and package-first salvage thinking from an earlier checkpoint.
+Use `PLANS.md` for the active work order and current sequencing decisions.
+
+This document maps the useful parts of `Control_System` into the target package boundaries defined by `ir_control_platform`.
+It is package-first rather than screen-first and remains useful as migration reference material.
 
 ## Target package dependency graph
 
@@ -58,7 +62,7 @@ flowchart LR
 
 ## Current-to-target mapping
 
-| Target package | Legacy sources worth using | What carries forward | What is explicitly rejected | First Phase 2 deliverable |
+| Target package | Legacy sources worth using | What carries forward | What is explicitly rejected | Historical initial scaffolding deliverable |
 |---|---|---|---|---|
 | `contracts` | `hardware_configuration.toml`, `ExperimentView.tsx`, `ScanModePanel.tsx`, `LaserSettingsPanel.tsx`, `ZurichHF2LIView.tsx`, vendor manuals | Canonical recipe fields, device capability limits, status and fault fields, stream selection semantics, session metadata fields | Browser state models, UI-only labels, auto-correction behavior, raw LabOne node paths as public contracts | Define `ExperimentRecipe`, `DeviceStatus`, `DeviceFault`, `ValidationIssue`, `RunState`, `SessionManifest`, and artifact types |
 | `platform` | `backend/src/main.py`, `start.bat`, route startup hooks, error handling patterns | Explicit bootstrap concerns, logging needs, normalized fault envelope, runtime configuration ownership | Module auto-discovery, per-device startup autoconnect, environment mutation as runtime behavior | Establish event, error, logging, and bootstrap primitives |

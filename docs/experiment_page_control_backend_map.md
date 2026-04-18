@@ -1,8 +1,8 @@
-# Experiment Page Control-to-Backend Map
+# Experiment Page Wiring Ledger
 
 ## Scope
 
-This map is only for the current `/experiment` MVP surface in `ir_control_platform`.
+This ledger is only for the current `/experiment` workflow in `ir_control_platform`.
 
 Baseline assumed here:
 - fixed MIRcat wavenumber control as the canonical run path
@@ -12,6 +12,7 @@ Baseline assumed here:
 - simulator-backed `SimulatorUiRuntime` is the active adapter behind the page
 
 Visible-but-not-baseline items are included only when they already appear on the current page, so future wiring work does not have to rediscover them.
+Use `PLANS.md` for the active sequence and this file as the implementation ledger for the current `Experiment` loop.
 
 ## Status Key
 
@@ -39,6 +40,13 @@ Important current split:
 - `Run Preflight` and fixed-mode `Start Experiment` use the canonical `experiment-engine` plus `data-pipeline` path.
 - Session save/open use `data-pipeline` through the runtime adapter.
 - Most simple device actions on the page still terminate in `SimulatorUiRuntime` and call simulator drivers directly.
+
+## Current Prioritization Rule
+
+Use this order when deciding what to wire next:
+- finish the controls, status, and workflow clarity that the default `Experiment` page still needs
+- allow supporting `Results`, `Advanced`, `Service`, and `Analyze` scaffolds only when they help keep `Experiment` focused
+- defer everything else until the default `Experiment` workflow is stable enough to promote detail outward
 
 ## Session Controls
 
@@ -96,7 +104,27 @@ All session form fields submit through `POST /experiment/session/save`, except r
 | Start Experiment | `POST /experiment/run/start` | `start_run()` -> `RunCoordinator.start_run()` -> `SessionStore.update_session_status()` / `append_event()` / `persist_raw_artifact()` / `finalize_session()` | exists and ready | This is the real fixed-baseline run path. It creates or reuses a saved session, arms timing, starts HF2 capture, starts MIRcat, persists HF2 raw artifacts, and finalizes the session. |
 | Stop / Abort Experiment | `POST /experiment/run/abort` | `abort_active_run()` -> `RunCoordinator.abort_run()` -> `SessionStore.append_event()` / `finalize_session()` | thin adapter needed | The abort boundary exists, but the current simulator run plan completes synchronously inside `start_run()`, so the operator rarely has a live in-progress run to interrupt from the page. |
 
-## Wiring Summary For Future Codex Tasks
+## Active Experiment Loop Backlog
+
+### Needed Now For `Experiment`
+- make sample ID and notes first-class session fields instead of note strings
+- add a wavelength alias or conversion only if the default `Experiment` page should accept it as a routine operator input
+- move visible scan controls onto the canonical engine or run path if scan remains part of the default `Experiment` workflow
+- wire Nd:YAG page controls into canonical run orchestration instead of draft-only state if they remain part of the default operator path
+- make `Stop / Abort Experiment` useful against a genuinely long-lived active run
+- finish the live status, warning, and acquisition-state support that the active `Experiment` target requires
+
+### Allowed Supporting Scaffolds
+- `Results` summaries, saved-session reopen, and artifact visibility that help review the operator workflow
+- `Advanced`, `Service`, and `Analyze` shells that keep non-routine detail out of `Experiment`
+- fixture-backed or simulator-backed summaries used to review `Experiment` honestly without inventing UI-local truth
+
+### Deferred Until After `Experiment` Stabilizes
+- deeper processing, analysis, and report work
+- device or expert surfaces that do not directly clarify the default operator flow
+- backend implementation added only because a future page might want it
+
+## Current Stable Support
 
 Fully supported now on the baseline path:
 - session name save/reopen
@@ -106,15 +134,3 @@ Fully supported now on the baseline path:
 - HF2LI connect/disconnect and core acquisition parameter fields
 - canonical preflight
 - fixed-mode `Start Experiment`
-
-Thin adapter work remains for:
-- making sample ID and notes first-class session fields instead of note strings
-- adding a wavelength alias/conversion if the page should accept wavelength as well as wavenumber
-- moving visible scan controls onto the canonical engine/run path
-- wiring Nd:YAG page controls into canonical run orchestration instead of draft-only state
-- making `Stop / Abort Experiment` useful against a genuinely long-lived active run
-
-Intentionally deferred on the current Experiment page:
-- pump controls
-- Pico controls in the MVP flow
-- standalone HF2 acquisition start/stop controls

@@ -14,7 +14,7 @@ It is normative for:
 Document relationship:
 
 - `AGENTS.md` defines the finished product, workflow-first architecture, and package boundaries.
-- `docs/operator_ui_mvp.md` defines the next-pass operator-facing UI target.
+- `docs/operator_ui_mvp.md` defines the current operator-facing `Experiment` acceptance target.
 - `docs/ui_foundation.md` defines the active UI foundation and workflow surface model.
 - `REFACTOR.md` defines migration constraints, salvage rules, and forbidden legacy patterns.
 - `PLANS.md` defines sequencing, milestones, and execution mechanics.
@@ -371,7 +371,7 @@ Placeholder note for future work:
 
 - A future phase may introduce direct OPO control only as a new first-class subsystem with its own contracts, timing semantics, validation, and UI mapping. It must not be smuggled into v1 as an expert-only side path.
 
-## 12. Implications for the next implementation pass
+## 12. Implications for the current implementation direction
 
 The supported v1 implementation slice remains:
 
@@ -384,7 +384,7 @@ The supported v1 implementation slice remains:
 - Nd:YAG timing semantics through T660-2
 - OPO placeholder only
 
-The next implementation pass is the operator-first UI MVP defined in `docs/operator_ui_mvp.md`.
+The current implementation direction is the operator-first `Experiment` iteration loop defined by `docs/operator_ui_mvp.md` and sequenced by `PLANS.md`.
 
 Implications for that pass:
 

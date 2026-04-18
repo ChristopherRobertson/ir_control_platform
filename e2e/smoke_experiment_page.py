@@ -25,7 +25,7 @@ VISIBLE_MARKERS = (
     "Session",
     "Operating Mode",
     "Nd:YAG Settings",
-    "HF2LI / Acquisition",
+    "HF2LI",
     "Run Control",
     "Save Session",
     "Run Preflight",
