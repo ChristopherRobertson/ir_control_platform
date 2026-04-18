@@ -420,12 +420,19 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.assertEqual(manifest.session_id, run_state.session_id)
         self.assertEqual(run_state.phase, RunPhase.COMPLETED)
         self.assertEqual(operate_page.session_panel.status_items, ())
+        self.assertIsNotNone(operate_page.results_handoff)
+        assert operate_page.results_handoff is not None
+        self.assertEqual(operate_page.results_handoff.label, "Open Latest Session in Results")
+        self.assertEqual(operate_page.results_handoff.session_id, run_state.session_id)
         self.assertFalse(hasattr(operate_page, "recent_activity"))
         self.assertFalse(hasattr(operate_page, "live_status"))
         self.assertIsNotNone(results_page.selected_session)
         assert results_page.selected_session is not None
         self.assertEqual(results_page.selected_session.session_id, run_state.session_id)
         self.assertGreaterEqual(len(results_page.artifact_panels), 1)
+        self.assertGreaterEqual(len(results_page.visualization_panels), 1)
+        self.assertGreaterEqual(len(results_page.export_panels), 1)
+        self.assertGreaterEqual(len(results_page.export_actions), 1)
         self.assertGreaterEqual(len(results_page.event_log), 1)
 
     def test_session_id_must_be_unique_across_saved_sessions(self) -> None:
@@ -565,6 +572,8 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.assertEqual(results_status, "200 OK")
         self.assertIn("Recent Sessions", results_body)
         self.assertIn("Artifacts and Provenance", results_body)
+        self.assertIn("Visualization and Overlay Review", results_body)
+        self.assertIn("Export From Persisted Session", results_body)
 
         self.assertEqual(advanced_status, "200 OK")
         self.assertIn("Timing and marker detail", advanced_body)
@@ -583,10 +592,11 @@ class OperatorFirstUiTests(unittest.TestCase):
 
         self.assertEqual(service_status, "200 OK")
         self.assertIn("Device Diagnostics", service_body)
+        self.assertIn("Calibration and recovery scope", service_body)
 
         self.assertEqual(analyze_status, "200 OK")
-        self.assertIn("Secondary persisted-session review surface", analyze_body)
-        self.assertIn("Analyze Preview", analyze_body)
+        self.assertIn("Saved-session scientific evaluation surface", analyze_body)
+        self.assertIn("Reprocessing and Comparison", analyze_body)
 
     def test_active_docs_point_to_operator_ui_mvp(self) -> None:
         repo_root = Path(ROOT)

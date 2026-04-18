@@ -145,6 +145,16 @@ class ActionButtonModel:
 
 
 @dataclass(frozen=True)
+class SurfaceActionModel:
+    label: str
+    route: str | None = None
+    session_id: str | None = None
+    tone: str = "primary"
+    disabled: bool = False
+    helper_text: str = ""
+
+
+@dataclass(frozen=True)
 class OperatePanelModel:
     title: str
     fields: tuple[FormFieldModel, ...] = ()
@@ -178,6 +188,7 @@ class OperatePageModel:
     ndyag_panel: OperatePanelModel
     acquisition_panel: OperatePanelModel
     run_panel: OperatePanelModel
+    results_handoff: SurfaceActionModel | None = None
 
 
 @dataclass(frozen=True)
@@ -210,7 +221,11 @@ class ResultsPageModel:
     selected_session: SessionSummaryCard | None
     detail_panels: tuple[SummaryPanel, ...]
     artifact_panels: tuple[SummaryPanel, ...] = ()
+    visualization_panels: tuple[SummaryPanel, ...] = ()
     storage_panels: tuple[SummaryPanel, ...] = ()
+    export_panels: tuple[SummaryPanel, ...] = ()
+    toolbar_actions: tuple[SurfaceActionModel, ...] = ()
+    export_actions: tuple[SurfaceActionModel, ...] = ()
     callouts: tuple[CalloutModel, ...] = ()
     event_log: tuple[EventLogItem, ...] = ()
 
@@ -224,7 +239,10 @@ class AnalyzePageModel:
     sessions: tuple[SessionSummaryCard, ...]
     selected_session: SessionSummaryCard | None
     summary_panels: tuple[SummaryPanel, ...]
+    evaluation_panels: tuple[SummaryPanel, ...] = ()
     tables: tuple[TableModel, ...] = ()
+    toolbar_actions: tuple[SurfaceActionModel, ...] = ()
+    evaluation_actions: tuple[SurfaceActionModel, ...] = ()
     callouts: tuple[CalloutModel, ...] = ()
 
 

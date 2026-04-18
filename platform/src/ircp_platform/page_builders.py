@@ -27,6 +27,7 @@ from ircp_ui_shell import (
     StatusBadge,
     StatusItemModel,
     SummaryPanel,
+    SurfaceActionModel,
     TableModel,
 )
 from ircp_ui_shell.page_state import blocked_state, empty_state, fault_state, unavailable_state, warning_state
@@ -97,6 +98,7 @@ def build_operate_page(
         ndyag_panel=_build_ndyag_panel(draft),
         acquisition_panel=_build_acquisition_panel(draft, hf2_status),
         run_panel=_build_run_panel(draft.experiment_type, preflight, latest_state),
+        results_handoff=_operate_results_handoff(draft_session_id, latest_state),
     )
 
 
@@ -120,7 +122,7 @@ def build_advanced_page(
     mapping = scenario.recipe.time_to_wavenumber_mapping
     return AdvancedPageModel(
         title="Advanced",
-        subtitle="Timing, routing, calibration, and readiness detail stays here instead of crowding the operator path.",
+        subtitle="Timing detail, routing, acquisition tuning, and guarded defaults stay here instead of crowding Experiment.",
         state=_preflight_page_state(
             preflight,
             title="Advanced detail blocked",
@@ -141,7 +143,7 @@ def build_advanced_page(
             ),
             AdvancedSectionModel(
                 title="Calibration and guarded defaults",
-                subtitle="Bench-owned references that exist now but should not dominate routine operation.",
+                subtitle="Guarded defaults stay reviewable here; calibration changes and recovery stay under Service.",
                 summary_panels=(
                     SummaryPanel(
                         title="Calibration context",
@@ -175,6 +177,11 @@ def build_advanced_page(
                 body="Timing, routing, calibration, and readiness inspection still exists, but it no longer leads the first five minutes of use.",
                 tone="info",
             ),
+            CalloutModel(
+                title="Service owns bench workflows",
+                body="Use Service for diagnostics, calibration custody, and recovery instead of treating Advanced as a generic settings bucket.",
+                tone="warn",
+            ),
         ),
     )
 
@@ -192,7 +199,9 @@ def build_results_page(
     page_state: PageStateModel | None = None
     detail_panels: tuple[SummaryPanel, ...] = ()
     artifact_panels: tuple[SummaryPanel, ...] = ()
+    visualization_panels: tuple[SummaryPanel, ...] = ()
     storage_panels: tuple[SummaryPanel, ...] = ()
+    export_panels: tuple[SummaryPanel, ...] = ()
     event_log: tuple[EventLogItem, ...] = ()
 
     if not session_cards:
@@ -204,6 +213,7 @@ def build_results_page(
     elif selected_session_id is not None and detail is not None:
         detail_panels = _detail_panels_from_session_detail(detail)
         artifact_panels = _artifact_panels_from_session_detail(detail)
+        visualization_panels = _results_visualization_panels(detail)
         storage_panels = (
             SummaryPanel(
                 title="Saved paths",
@@ -216,6 +226,7 @@ def build_results_page(
                 ),
             ),
         )
+        export_panels = _results_export_panels(detail)
         event_log = tuple(
             EventLogItem(
                 timestamp=event.emitted_at,
@@ -250,14 +261,18 @@ def build_results_page(
 
     return ResultsPageModel(
         title="Results",
-        subtitle="Review saved sessions, raw artifacts, and human-readable provenance without turning this into an analysis workstation.",
+        subtitle="Persisted-session review surface for visualizations, overlays, provenance, and export handoff without turning this into live control.",
         state=page_state,
         surface_badges=_surface_badges("results", draft),
         sessions=session_cards,
         selected_session=selected_session,
         detail_panels=detail_panels,
         artifact_panels=artifact_panels,
+        visualization_panels=visualization_panels,
         storage_panels=storage_panels if selected_session_id is not None else (),
+        export_panels=export_panels,
+        toolbar_actions=_results_toolbar_actions(selected_session_id),
+        export_actions=_results_export_actions(selected_session_id, detail),
         callouts=_results_callouts(storage_root, selected_session_id, page_state),
         event_log=event_log,
     )
@@ -274,6 +289,7 @@ def build_analyze_page(
     selected_session = next((card for card in session_cards if card.session_id == selected_session_id), None)
     page_state: PageStateModel | None = None
     summary_panels: tuple[SummaryPanel, ...] = ()
+    evaluation_panels: tuple[SummaryPanel, ...] = ()
     callouts: tuple[CalloutModel, ...] = ()
     tables: tuple[TableModel, ...] = ()
 
@@ -285,6 +301,7 @@ def build_analyze_page(
         )
     elif selected_session_id is not None and detail is not None:
         summary_panels = _analyze_summary_panels(detail)
+        evaluation_panels = _analyze_evaluation_panels(detail)
         callouts = _analyze_callouts(detail)
         tables = _analyze_tables(detail)
         if not detail.summary.replay_ready:
@@ -302,13 +319,16 @@ def build_analyze_page(
 
     return AnalyzePageModel(
         title="Analyze",
-        subtitle="Secondary persisted-session review surface. Real inputs are shown clearly; deeper analysis wiring remains separate.",
+        subtitle="Saved-session scientific evaluation surface for reprocessing, comparison, and derived metrics. Live control stays elsewhere.",
         state=page_state,
         surface_badges=_surface_badges("analyze", draft),
         sessions=session_cards,
         selected_session=selected_session,
         summary_panels=summary_panels,
+        evaluation_panels=evaluation_panels,
         tables=tables,
+        toolbar_actions=_analyze_toolbar_actions(selected_session_id),
+        evaluation_actions=_analyze_evaluation_actions(selected_session_id),
         callouts=callouts,
     )
 
@@ -322,7 +342,7 @@ def build_service_page(
 ) -> ServicePageModel:
     return ServicePageModel(
         title="Service",
-        subtitle="Expert-only diagnostics, maintenance visibility, and guarded service context.",
+        subtitle="Bench-owned calibration, diagnostics, timing verification, configuration review, and controlled recovery.",
         state=unavailable_state(
             "Service scaffold only",
             "This pass exposes expert review surfaces and guarded placeholders, not raw vendor consoles.",
@@ -345,6 +365,15 @@ def build_service_page(
                     f"Storage root: {storage_root}",
                     "Session manifests live under sessions/<session_id>/manifest.json",
                     "Raw payloads stay under sessions/<session_id>/artifacts/raw/",
+                ),
+            ),
+            SummaryPanel(
+                title="Calibration and recovery scope",
+                subtitle="Bench-owned truths and recovery actions stay explicit instead of leaking into Experiment.",
+                items=(
+                    "Calibration references are guarded service-owned inputs.",
+                    "Timing verification remains a service review activity.",
+                    "Configuration snapshots support restart-safe diagnosis before recovery.",
                 ),
             ),
         ),
@@ -922,13 +951,13 @@ def _surface_badges(surface: str, draft: OperatorDraftState) -> tuple[StatusBadg
         ),
         "results": (
             StatusBadge(label="Persisted sessions", tone="good"),
-            StatusBadge(label="Raw artifact visibility", tone="good"),
+            StatusBadge(label="Visualization home", tone="good"),
             StatusBadge(label="Human-readable provenance", tone="info"),
         ),
         "analyze": (
             StatusBadge(label="Persisted inputs only", tone="good"),
             StatusBadge(label="Secondary surface", tone="warn"),
-            StatusBadge(label="Future wiring explicit", tone="info"),
+            StatusBadge(label="Evaluation actions staged", tone="info"),
         ),
         "service": (
             StatusBadge(label="Expert surface", tone="warn"),
@@ -1118,6 +1147,116 @@ def _artifact_panels_from_session_detail(detail: SessionDetail) -> tuple[Summary
     return tuple(panels)
 
 
+def _operate_results_handoff(
+    draft_session_id: str | None,
+    latest_state: RunState | None,
+) -> SurfaceActionModel | None:
+    session_id = draft_session_id or (latest_state.session_id if latest_state is not None else None)
+    if session_id is None:
+        return None
+    return SurfaceActionModel(
+        label="Open Latest Session in Results",
+        route="results",
+        session_id=session_id,
+        tone="secondary",
+        helper_text="Persisted review, visualizations, and export stay off the control surface.",
+    )
+
+
+def _results_toolbar_actions(selected_session_id: str | None) -> tuple[SurfaceActionModel, ...]:
+    if selected_session_id is None:
+        return ()
+    return (
+        SurfaceActionModel(
+            label="Analyze This Session",
+            route="analyze",
+            session_id=selected_session_id,
+            tone="secondary",
+            helper_text="Scientific evaluation starts from the saved session you are already reviewing.",
+        ),
+    )
+
+
+def _results_visualization_panels(detail: SessionDetail) -> tuple[SummaryPanel, ...]:
+    manifest = detail.manifest
+    return (
+        SummaryPanel(
+            title="Visualization Review",
+            subtitle="Results owns the persisted plots and final visual review, not the Experiment control page.",
+            items=(
+                f"Primary HF2 traces available: {len(detail.primary_raw_artifacts)}",
+                f"Processed traces available: {len(detail.processed_artifacts)}",
+                f"Saved replay readiness: {'yes' if detail.summary.replay_ready else 'no'}",
+                f"Selected session status: {detail.summary.status.value}",
+            ),
+        ),
+        SummaryPanel(
+            title="Overlay Context",
+            subtitle="Overlay views stay provenance-aware and keep HF2LI primary raw data authoritative.",
+            items=(
+                f"Secondary monitor traces available: {len(detail.secondary_monitor_artifacts)}",
+                f"Digital markers: {', '.join(manifest.selected_markers) if manifest.selected_markers else 'none'}",
+                f"Pico trigger marker: {manifest.pico_summary.trigger_marker.value if manifest.pico_summary.trigger_marker else 'none'}",
+                (
+                    "Time-to-wavenumber mapping: "
+                    f"{manifest.time_to_wavenumber_mapping.mapping_id if manifest.time_to_wavenumber_mapping else 'none'}"
+                ),
+            ),
+        ),
+    )
+
+
+def _results_export_panels(detail: SessionDetail) -> tuple[SummaryPanel, ...]:
+    return (
+        SummaryPanel(
+            title="Export Readiness",
+            subtitle="Exports remain reproducible because they start from persisted artifacts instead of live hardware state.",
+            items=(
+                f"Primary raw source artifacts: {len(detail.primary_raw_artifacts)}",
+                f"Processed source artifacts: {len(detail.processed_artifacts)}",
+                f"Analysis source artifacts: {len(detail.analysis_artifacts)}",
+                f"Saved export artifacts: {len(detail.export_artifacts)}",
+            ),
+        ),
+        SummaryPanel(
+            title="Export Provenance",
+            subtitle="Recorded export outputs stay tied to saved inputs and final session state.",
+            items=(
+                f"Selected session: {detail.manifest.session_id}",
+                f"Final event id: {detail.manifest.outcome.final_event_id or 'n/a'}",
+                f"Failure reason: {detail.manifest.outcome.failure_reason.value if detail.manifest.outcome.failure_reason else 'none'}",
+                "Export scope remains session-centered and reproducible outside the UI.",
+            ),
+        ),
+    )
+
+
+def _results_export_actions(
+    selected_session_id: str | None,
+    detail: SessionDetail | None,
+) -> tuple[SurfaceActionModel, ...]:
+    disabled = selected_session_id is None or detail is None
+    helper = (
+        "Select a saved session first."
+        if disabled
+        else "Placeholder only for now. Final export actions will run from persisted artifacts through the reports boundary."
+    )
+    return (
+        SurfaceActionModel(
+            label="Generate Session Report",
+            tone="primary",
+            disabled=True,
+            helper_text=helper,
+        ),
+        SurfaceActionModel(
+            label="Export Artifact Bundle",
+            tone="ghost",
+            disabled=True,
+            helper_text="Export remains a Results-owned action and will never read live device state.",
+        ),
+    )
+
+
 def _results_callouts(
     storage_root: Path,
     selected_session_id: str | None,
@@ -1133,6 +1272,11 @@ def _results_callouts(
             title="Storage root policy",
             body=f"Sessions persist under {storage_root} so they survive runtime recreation.",
             tone="info",
+        ),
+        CalloutModel(
+            title="Visualization and export live here",
+            body="Results is the persisted-session home for plots, overlays, provenance review, and export handoff.",
+            tone="good",
         ),
     ]
     if selected_session_id is not None:
@@ -1178,12 +1322,78 @@ def _analyze_summary_panels(detail: SessionDetail) -> tuple[SummaryPanel, ...]:
         ),
         SummaryPanel(
             title="Analysis Scope Preview",
-            subtitle="This page is making the required review surface visible before the jobs are fully wired.",
+            subtitle="Analyze stays thinner than Results and starts from saved-session truth only.",
             items=(
                 "Reprocess from persisted raw inputs",
                 "Compare against prior sessions or baselines",
                 "Generate derived metrics and quality summaries",
             ),
+        ),
+    )
+
+
+def _analyze_evaluation_panels(detail: SessionDetail) -> tuple[SummaryPanel, ...]:
+    return (
+        SummaryPanel(
+            title="Reprocessing Inputs",
+            subtitle="Everything needed for reprocessing must already exist in persisted form before this page acts.",
+            items=(
+                f"Replay-ready raw inputs: {len(detail.replay_plan.primary_raw_artifact_ids)}",
+                f"Secondary monitor inputs: {len(detail.replay_plan.secondary_monitor_artifact_ids)}",
+                f"Processed outputs already recorded: {len(detail.processed_artifacts)}",
+                f"Analysis outputs already recorded: {len(detail.analysis_artifacts)}",
+            ),
+        ),
+        SummaryPanel(
+            title="Comparison and Metrics",
+            subtitle="Scientific evaluation work stays here instead of leaking into Results or Experiment.",
+            items=(
+                "Compare against saved baselines or prior sessions",
+                "Inspect derived metrics and quality summaries",
+                "Keep export of comparison outputs secondary to Results review",
+            ),
+        ),
+    )
+
+
+def _analyze_toolbar_actions(selected_session_id: str | None) -> tuple[SurfaceActionModel, ...]:
+    if selected_session_id is None:
+        return ()
+    return (
+        SurfaceActionModel(
+            label="Back to Results",
+            route="results",
+            session_id=selected_session_id,
+            tone="secondary",
+            helper_text="Return to the persisted-session review surface for plots, provenance, and export.",
+        ),
+    )
+
+
+def _analyze_evaluation_actions(selected_session_id: str | None) -> tuple[SurfaceActionModel, ...]:
+    helper = (
+        "Select a saved session first."
+        if selected_session_id is None
+        else "Placeholder only for now. These actions stay headless and operate on persisted artifacts once wired."
+    )
+    return (
+        SurfaceActionModel(
+            label="Reprocess Session",
+            tone="primary",
+            disabled=True,
+            helper_text=helper,
+        ),
+        SurfaceActionModel(
+            label="Compare Against Baseline",
+            tone="ghost",
+            disabled=True,
+            helper_text="Comparison will remain a saved-session workflow, not a live-control action.",
+        ),
+        SurfaceActionModel(
+            label="Generate Metrics",
+            tone="secondary",
+            disabled=True,
+            helper_text="Derived metrics stay in analysis jobs instead of becoming UI-local truth.",
         ),
     )
 
@@ -1259,6 +1469,17 @@ def _service_tables(storage_root: Path, session_count: int) -> tuple[TableModel,
                 ("Manifest path", "sessions/<session_id>/manifest.json"),
                 ("Raw payload path", "sessions/<session_id>/artifacts/raw/*.parquet"),
                 ("Current saved sessions", str(session_count)),
+            ),
+        ),
+        TableModel(
+            title="Controlled Service Responsibilities",
+            subtitle="Bench-owned work stays explicit here instead of leaking into Experiment.",
+            headers=("Service Area", "Current Expectation"),
+            rows=(
+                ("Calibration custody", "Guarded references and mapping defaults remain bench-owned"),
+                ("Timing verification", "Use persisted context and diagnostics before recovery"),
+                ("Configuration snapshots", "Review saved snapshots before changing installation-owned settings"),
+                ("Recovery actions", "Perform explicit recovery here, not through vendor-style passthrough screens"),
             ),
         ),
     )

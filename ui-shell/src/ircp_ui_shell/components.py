@@ -24,6 +24,7 @@ from .models import (
     StatusBadge,
     StatusItemModel,
     SummaryPanel,
+    SurfaceActionModel,
     TableModel,
 )
 from .page_state import PageStateModel
@@ -847,9 +848,11 @@ def render_callout(callout: CalloutModel) -> str:
 
 
 def render_operate_page(page: OperatePageModel, scenario_id: str) -> str:
+    results_handoff = render_surface_handoff(page.results_handoff, scenario_id)
     return f"""
     <div class="page-stack">
       {render_page_state(page.state)}
+      {results_handoff}
       {render_operate_panel(page.session_panel, scenario_id)}
       {render_operate_panel(page.laser_panel, scenario_id)}
       <section class="panel-grid">
@@ -936,6 +939,37 @@ def render_action_button(button: ActionButtonModel, scenario_id: str) -> str:
     )
 
 
+def render_surface_handoff(action: SurfaceActionModel | None, scenario_id: str) -> str:
+    if action is None:
+        return ""
+    return f"""
+    <section class="panel">
+      <h3>Results Handoff</h3>
+      <p class="panel-subtitle">Persisted review, visualizations, and export stay off the control surface.</p>
+      {render_surface_action_row((action,), scenario_id)}
+    </section>"""
+
+
+def render_surface_action_row(actions: tuple[SurfaceActionModel, ...], scenario_id: str) -> str:
+    if not actions:
+        return ""
+    rendered = "".join(render_surface_action(action, scenario_id) for action in actions)
+    return f'<div class="toolbar-row">{rendered}</div>'
+
+
+def render_surface_action(action: SurfaceActionModel, scenario_id: str) -> str:
+    helper = f'<span class="button-note">{escape(action.helper_text)}</span>' if action.helper_text else ""
+    tone_class = "" if action.tone == "primary" else f" {escape(action.tone)}"
+    if action.disabled or action.route is None:
+        control = f'<span class="button-link{tone_class} disabled">{escape(action.label)}</span>'
+    else:
+        href = f'/{escape(action.route)}?scenario={escape(scenario_id)}'
+        if action.session_id:
+            href += f'&session_id={escape(action.session_id)}'
+        control = f'<a class="button-link{tone_class}" href="{href}">{escape(action.label)}</a>'
+    return f"<div>{control}{helper}</div>"
+
+
 def render_status_item(item: StatusItemModel) -> str:
     detail = f'<div class="small">{escape(item.detail)}</div>' if item.detail else ""
     return (
@@ -1011,16 +1045,25 @@ def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
     artifacts = "".join(render_summary_panel(panel) for panel in page.artifact_panels) or (
         '<div class="placeholder-copy">Artifact groups appear after a session is selected.</div>'
     )
+    visualizations = "".join(render_summary_panel(panel) for panel in page.visualization_panels) or (
+        '<div class="placeholder-copy">Select a session to review persisted plots and overlay context.</div>'
+    )
     storage = "".join(render_summary_panel(panel) for panel in page.storage_panels)
+    exports = "".join(render_summary_panel(panel) for panel in page.export_panels) or (
+        '<div class="placeholder-copy">Select a session to inspect export readiness and provenance.</div>'
+    )
     events = "".join(render_event_row(item) for item in page.event_log) or (
         '<div class="placeholder-copy">No saved event timeline is available for this selection.</div>'
     )
+    toolbar = render_surface_action_row(page.toolbar_actions, scenario_id)
+    export_actions = render_surface_action_row(page.export_actions, scenario_id)
     return f"""
     <div class="page-stack">
       <section class="hero">
         <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
         <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {toolbar}
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
@@ -1046,6 +1089,19 @@ def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
           <h3>Storage Details</h3>
           <p class="panel-subtitle">Basic durable session details that can already be shown honestly.</p>
           {storage or '<div class="placeholder-copy">Storage details appear when a session is selected.</div>'}
+        </div>
+      </section>
+      <section class="panel-grid">
+        <div class="panel">
+          <h3>Visualization and Overlay Review</h3>
+          <p class="panel-subtitle">Persisted plots, overlays, and marker context live here instead of on Experiment.</p>
+          <div class="panel-grid">{visualizations}</div>
+        </div>
+        <div class="panel">
+          <h3>Export From Persisted Session</h3>
+          <p class="panel-subtitle">Export stays reproducible because it starts from saved artifacts and provenance.</p>
+          {export_actions}
+          <div class="panel-grid">{exports}</div>
         </div>
       </section>
       <section class="panel">
@@ -1096,13 +1152,19 @@ def render_analyze_page(page: AnalyzePageModel, scenario_id: str) -> str:
     summaries = "".join(render_summary_panel(panel) for panel in page.summary_panels) or (
         '<div class="placeholder-copy">Select a session to inspect analysis context.</div>'
     )
+    evaluation = "".join(render_summary_panel(panel) for panel in page.evaluation_panels) or (
+        '<div class="placeholder-copy">Select a session to stage reprocessing, comparison, and metric work.</div>'
+    )
     tables = "".join(render_table_section(table) for table in page.tables)
+    toolbar = render_surface_action_row(page.toolbar_actions, scenario_id)
+    evaluation_actions = render_surface_action_row(page.evaluation_actions, scenario_id)
     return f"""
     <div class="page-stack">
       <section class="hero">
         <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
         <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {toolbar}
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
@@ -1113,10 +1175,16 @@ def render_analyze_page(page: AnalyzePageModel, scenario_id: str) -> str:
           {sessions}
         </div>
         <div class="panel">
-          <h3>Analyze Preview</h3>
-          <p class="panel-subtitle">Small, explicit signals for what exists now and what is deferred.</p>
-          {summaries}
+          <h3>Reprocessing and Comparison</h3>
+          <p class="panel-subtitle">Scientific evaluation begins from a selected saved session, not from live control state.</p>
+          {evaluation_actions}
+          <div class="panel-grid">{evaluation}</div>
         </div>
+      </section>
+      <section class="panel">
+        <h3>Saved-Session Inputs</h3>
+        <p class="panel-subtitle">Analyze reads persisted inputs, upstream outputs, and replay readiness before any evaluation step.</p>
+        <div class="panel-grid">{summaries}</div>
       </section>
       {tables}
     </div>"""
