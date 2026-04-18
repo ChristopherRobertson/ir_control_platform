@@ -182,9 +182,16 @@ class OperatorFirstUiTests(unittest.TestCase):
         operate_page = asyncio.run(runtime.get_operate_page())
         visible_actions = self._visible_action_buttons(operate_page.laser_panel)
 
-        self.assertEqual(tuple(button.label for button in visible_actions), ("Disarm", "Tune", "Emission Off"))
+        self.assertEqual(tuple(button.label for button in visible_actions), ("Disarm", "Cancel", "Emission Off"))
         self.assertEqual(visible_actions[0].tone, "danger")
+        self.assertEqual(visible_actions[1].tone, "danger")
         self.assertEqual(visible_actions[2].tone, "danger")
+
+        asyncio.run(runtime.cancel_laser_tune())
+        cancelled_page = asyncio.run(runtime.get_operate_page())
+        cancelled_actions = self._visible_action_buttons(cancelled_page.laser_panel)
+
+        self.assertEqual(tuple(button.label for button in cancelled_actions), ("Disarm", "Tune", "Emission Off"))
 
     def test_mircat_panel_shows_reported_faults_in_footer_callout(self) -> None:
         runtimes = self._create_runtime_map()

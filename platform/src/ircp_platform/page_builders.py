@@ -535,6 +535,7 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
     armed = bool_vendor_status(status, "armed")
     emission = bool_vendor_status(status, "emission_enabled")
     scan_active = bool_vendor_status(status, "scan_active")
+    tune_confirmed = status.vendor_status.get("tune_state") == "tuned"
     fixed_mode = draft.experiment_type == FIXED_WAVELENGTH_EXPERIMENT_TYPE
     pulsed_mode = draft.emission_mode.value == "pulsed"
     mode_fields = (
@@ -684,10 +685,12 @@ def _build_laser_panel(draft: OperatorDraftState, status: DeviceStatus) -> Opera
                 disabled=not status.connected,
             ),
             ActionButtonModel(
-                "Tune",
+                "Cancel" if tune_confirmed else "Tune",
                 "/experiment/laser/tune",
                 disabled=not status.connected,
                 hidden=not fixed_mode,
+                tone="danger" if tune_confirmed else "primary",
+                hidden_fields=(("laser_tune_intent", "cancel"),) if tune_confirmed else (),
             ),
             ActionButtonModel(
                 "Start Scan",

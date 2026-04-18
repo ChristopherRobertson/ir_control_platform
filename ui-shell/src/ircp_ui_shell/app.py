@@ -306,7 +306,10 @@ class IRCPUiApp:
                         pulse_duty_cycle_percent=_optional_float(form, "pulse_duty_cycle_percent"),
                     )
                 )
-                asyncio.run(runtime.tune_laser(_require_float(form, "tune_target_cm1")))
+                if _extract_value(form, "laser_tune_intent") == "cancel":
+                    asyncio.run(runtime.cancel_laser_tune())
+                else:
+                    asyncio.run(runtime.tune_laser(_require_float(form, "tune_target_cm1")))
                 return self._redirect(start_response, self._surface_location("experiment", scenario_id))
             if path == "/experiment/laser/scan/start":
                 asyncio.run(

@@ -476,6 +476,11 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         self._mark_preflight_dirty()
         return snapshot
 
+    async def cancel_laser_tune(self) -> DeviceStatus:
+        status = await self._scenario.bundle.mircat.stop_recipe()
+        self._mark_preflight_dirty()
+        return status
+
     async def start_scan(
         self,
         *,

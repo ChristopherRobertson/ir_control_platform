@@ -152,6 +152,10 @@ class UiCommandService(Protocol):
         """Apply a single-wavelength tune target for operator review."""
         ...
 
+    async def cancel_laser_tune(self) -> DeviceStatus:
+        """Cancel the current single-wavelength tune and return MIRcat to idle."""
+        ...
+
     async def start_scan(
         self,
         *,

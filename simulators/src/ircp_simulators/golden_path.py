@@ -470,6 +470,7 @@ class SimulatedMircatDriver(MircatDriver):
 
     async def stop_recipe(self) -> DeviceStatus:
         self._scan_active = False
+        self._tuned_target_cm1 = None
         self._tune_state = "idle"
         self._status = _base_status(
             device_id="mircat-qcl",
