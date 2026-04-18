@@ -4,4 +4,6 @@ ircpenv/Lib/*
 ircpenv/Lib
 ircpenv/Scripts/*
 ircpenv/Scripts
-
+__pycache__/
+*.pyc
+*.pyo
