@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import fields, is_dataclass
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
+import json
 
 from ircp_contracts import DeviceStatus, RunEvent, RunEventType, RunPhase, RunState
 from ircp_data_pipeline import ArtifactSummary
@@ -78,3 +82,30 @@ def artifact_summary_line(artifact: ArtifactSummary) -> str:
     if artifact.related_marker:
         summary_bits.append(f"marker={artifact.related_marker}")
     return " | ".join(summary_bits)
+
+
+def serialize_value(value: object) -> object:
+    if is_dataclass(value):
+        return {
+            field.name: serialize_value(getattr(value, field.name))
+            for field in fields(value)
+        }
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, tuple):
+        return [serialize_value(item) for item in value]
+    if isinstance(value, list):
+        return [serialize_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): serialize_value(item) for key, item in value.items()}
+    return value
+
+
+def json_bytes(value: object) -> bytes:
+    return (json.dumps(serialize_value(value), indent=2) + "\n").encode("utf-8")
+
+
+def json_lines_bytes(values: tuple[object, ...]) -> bytes:
+    return "".join(json.dumps(serialize_value(value)) + "\n" for value in values).encode("utf-8")

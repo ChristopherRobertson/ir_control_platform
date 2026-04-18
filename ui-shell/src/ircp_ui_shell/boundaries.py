@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ircp_contracts import DeviceConfiguration, DeviceStatus, PreflightReport, RunState, SessionManifest
 
 from .models import AnalyzePageModel, AdvancedPageModel, HeaderStatus, OperatePageModel, ResultsPageModel, ServicePageModel
+
+
+@dataclass(frozen=True)
+class ResultsDownload:
+    filename: str
+    content_type: str
+    body: bytes
 
 
 @runtime_checkable
@@ -19,8 +27,25 @@ class UiQueryService(Protocol):
         """Return the default operator-first page model."""
         ...
 
-    async def get_results_page(self, selected_session_id: str | None = None) -> ResultsPageModel:
+    async def get_results_page(
+        self,
+        selected_session_id: str | None = None,
+        *,
+        search: str = "",
+        status_filter: str = "all",
+        sort_order: str = "updated_desc",
+    ) -> ResultsPageModel:
         """Return the saved-session review page model."""
+        ...
+
+    async def get_results_download(
+        self,
+        session_id: str,
+        *,
+        asset: str | None = None,
+        artifact_id: str | None = None,
+    ) -> ResultsDownload:
+        """Return one Results-owned file or serialized session artifact for download."""
         ...
 
     async def get_advanced_page(self) -> AdvancedPageModel:

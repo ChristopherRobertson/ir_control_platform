@@ -18,7 +18,10 @@ from .models import (
     OperateDisclosureModel,
     OperatePageModel,
     OperatePanelModel,
+    ResultsArtifactRowModel,
+    ResultsFilterModel,
     ResultsPageModel,
+    ResultsTracePreviewModel,
     ServicePageModel,
     SessionSummaryCard,
     StatusBadge,
@@ -70,6 +73,10 @@ body {
 
 a { color: #0f4c5c; text-decoration: none; }
 a:hover { text-decoration: underline; }
+code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.92em;
+}
 
 main {
   max-width: 1240px;
@@ -164,6 +171,40 @@ main {
   border-radius: 18px;
   padding: 18px;
   box-shadow: var(--shadow);
+}
+
+.selection-context {
+  display: grid;
+  gap: 16px;
+}
+
+.metric-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.results-action-bar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.results-filter-form {
+  display: grid;
+  gap: 12px;
+}
+
+.results-filter-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(180px, 1fr));
+}
+
+.filter-summary {
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 .panel-header-row {
@@ -313,6 +354,91 @@ button:disabled, .button-link.disabled {
 .status-label.info { background: #e2eef8; }
 .status-label.neutral { background: #edf2f7; }
 
+.session-card.selected {
+  background: rgba(15, 118, 110, 0.08);
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  border-radius: 14px;
+  margin: 8px -10px 0;
+  padding: 12px 10px 10px;
+}
+
+.session-card.selected:first-child {
+  margin-top: 0;
+}
+
+.trace-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.trace-card {
+  display: grid;
+  gap: 12px;
+}
+
+.trace-chart {
+  border: 1px solid #ebe7db;
+  border-radius: 14px;
+  padding: 10px;
+  background:
+    linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(15, 118, 110, 0.02)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 248, 249, 0.92));
+}
+
+.trace-chart svg {
+  width: 100%;
+  height: 132px;
+  display: block;
+}
+
+.trace-chart polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trace-meta {
+  display: grid;
+  gap: 6px;
+}
+
+.artifact-list {
+  display: grid;
+}
+
+.artifact-row {
+  padding: 12px 0;
+  border-top: 1px solid #ebe7db;
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.artifact-row-head {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.artifact-row-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.artifact-row-path {
+  word-break: break-word;
+  color: #4b5563;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -437,6 +563,7 @@ details > summary::-webkit-details-marker { display: none; }
   main { padding: 20px 16px 36px; }
   .shell-header { padding: 22px 16px 24px; }
   .shell-header h1 { font-size: 1.7rem; }
+  .results-filter-grid { grid-template-columns: 1fr; }
 }
 """
 
@@ -960,14 +1087,23 @@ def render_surface_action_row(actions: tuple[SurfaceActionModel, ...], scenario_
 def render_surface_action(action: SurfaceActionModel, scenario_id: str) -> str:
     helper = f'<span class="button-note">{escape(action.helper_text)}</span>' if action.helper_text else ""
     tone_class = "" if action.tone == "primary" else f" {escape(action.tone)}"
-    if action.disabled or action.route is None:
+    href = _surface_action_href(action, scenario_id)
+    if action.disabled or href is None:
         control = f'<span class="button-link{tone_class} disabled">{escape(action.label)}</span>'
     else:
-        href = f'/{escape(action.route)}?scenario={escape(scenario_id)}'
-        if action.session_id:
-            href += f'&session_id={escape(action.session_id)}'
         control = f'<a class="button-link{tone_class}" href="{href}">{escape(action.label)}</a>'
     return f"<div>{control}{helper}</div>"
+
+
+def _surface_action_href(action: SurfaceActionModel, scenario_id: str) -> str | None:
+    if action.route is None:
+        return None
+    query_params = [f"scenario={escape(scenario_id)}"]
+    if action.session_id:
+        query_params.append(f"session_id={escape(action.session_id)}")
+    for key, value in action.query_params:
+        query_params.append(f"{escape(key)}={escape(value)}")
+    return f'/{escape(action.route)}?{"&".join(query_params)}'
 
 
 def render_status_item(item: StatusItemModel) -> str:
@@ -1039,23 +1175,28 @@ def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
     sessions = "".join(render_session_card(card, scenario_id, target="results") for card in page.sessions) or (
         '<div class="placeholder-copy">No saved sessions are available yet.</div>'
     )
+    filters = render_results_filters(page.filters, page.selected_session, scenario_id)
+    selected_context = render_results_selected_context(page, scenario_id)
     details = "".join(render_summary_panel(panel) for panel in page.detail_panels) or (
         '<div class="placeholder-copy">Select a session to inspect the saved summary.</div>'
     )
     artifacts = "".join(render_summary_panel(panel) for panel in page.artifact_panels) or (
         '<div class="placeholder-copy">Artifact groups appear after a session is selected.</div>'
     )
+    artifact_rows = render_results_artifact_registry(page.artifact_rows, scenario_id)
     visualizations = "".join(render_summary_panel(panel) for panel in page.visualization_panels) or (
         '<div class="placeholder-copy">Select a session to review persisted plots and overlay context.</div>'
     )
+    trace_previews = "".join(render_results_trace_preview(preview) for preview in page.trace_previews) or (
+        '<div class="placeholder-copy">Select a session with saved raw artifacts to preview persisted traces.</div>'
+    )
     storage = "".join(render_summary_panel(panel) for panel in page.storage_panels)
     exports = "".join(render_summary_panel(panel) for panel in page.export_panels) or (
-        '<div class="placeholder-copy">Select a session to inspect export readiness and provenance.</div>'
+        '<div class="placeholder-copy">Select a session to inspect download readiness and export scope.</div>'
     )
     events = "".join(render_event_row(item) for item in page.event_log) or (
         '<div class="placeholder-copy">No saved event timeline is available for this selection.</div>'
     )
-    toolbar = render_surface_action_row(page.toolbar_actions, scenario_id)
     export_actions = render_surface_action_row(page.export_actions, scenario_id)
     return f"""
     <div class="page-stack">
@@ -1063,52 +1204,196 @@ def render_results_page(page: ResultsPageModel, scenario_id: str) -> str:
         <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
         <p class="hero-subtitle">{escape(page.subtitle)}</p>
-        {toolbar}
+        {filters}
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
       <section class="panel-grid">
         <div class="panel">
           <h3>Recent Sessions</h3>
-          <p class="panel-subtitle">Pick a saved session and review the persisted record.</p>
+          <p class="panel-subtitle">Review the saved session catalog, then pin one run for deeper inspection.</p>
           {sessions}
         </div>
-        <div class="panel">
-          <h3>Selected Session</h3>
-          <p class="panel-subtitle">Human-readable summary of the saved manifest, outcome, and replay context.</p>
-          {details}
-        </div>
+        {selected_context}
       </section>
       <section class="panel-grid">
         <div class="panel">
-          <h3>Artifacts and Provenance</h3>
-          <p class="panel-subtitle">Saved raw, processed, analysis, and export groups remain separated.</p>
-          {artifacts}
+          <h3>Overview and Provenance</h3>
+          <p class="panel-subtitle">Human-readable summary of manifest state, replay context, and saved provenance.</p>
+          <div class="panel-grid">{details}</div>
         </div>
         <div class="panel">
           <h3>Storage Details</h3>
-          <p class="panel-subtitle">Basic durable session details that can already be shown honestly.</p>
+          <p class="panel-subtitle">Durable paths and saved session context for the current selection.</p>
           {storage or '<div class="placeholder-copy">Storage details appear when a session is selected.</div>'}
         </div>
       </section>
+      <section class="panel">
+        <h3>Visualization and Trace Review</h3>
+        <p class="panel-subtitle">Persisted plots, traces, and marker context live here instead of on Experiment.</p>
+        <div class="panel-grid">{visualizations}</div>
+        <div class="trace-grid">{trace_previews}</div>
+      </section>
+      <section class="panel">
+        <h3>Artifacts and Provenance</h3>
+        <p class="panel-subtitle">Saved raw, processed, analysis, and export groups remain separated and downloadable when files are present.</p>
+        <div class="panel-grid">{artifacts}</div>
+        {artifact_rows}
+      </section>
       <section class="panel-grid">
         <div class="panel">
-          <h3>Visualization and Overlay Review</h3>
-          <p class="panel-subtitle">Persisted plots, overlays, and marker context live here instead of on Experiment.</p>
-          <div class="panel-grid">{visualizations}</div>
-        </div>
-        <div class="panel">
-          <h3>Export From Persisted Session</h3>
-          <p class="panel-subtitle">Export stays reproducible because it starts from saved artifacts and provenance.</p>
+          <h3>Download and Export</h3>
+          <p class="panel-subtitle">Downloads run from persisted session truth. Unsupported actions stay visibly disabled.</p>
           {export_actions}
           <div class="panel-grid">{exports}</div>
         </div>
+        <div class="panel">
+          <h3>Session Activity</h3>
+          <p class="panel-subtitle">Persisted run events for the selected session.</p>
+          {events}
+        </div>
       </section>
-      <section class="panel">
-        <h3>Session Activity</h3>
-        <p class="panel-subtitle">Persisted run events for the selected session.</p>
-        {events}
-      </section>
+    </div>"""
+
+
+def render_results_filters(
+    filters: ResultsFilterModel,
+    selected_session: SessionSummaryCard | None,
+    scenario_id: str,
+) -> str:
+    search_value = escape(filters.search_value)
+    selected_session_id = selected_session.session_id if selected_session is not None else "__none__"
+    status_options = "".join(
+        f'<option value="{escape(option.value)}" {"selected" if option.selected else ""}>{escape(option.label)}</option>'
+        for option in filters.status_options
+    )
+    sort_options = "".join(
+        f'<option value="{escape(option.value)}" {"selected" if option.selected else ""}>{escape(option.label)}</option>'
+        for option in filters.sort_options
+    )
+    return f"""
+    <form method="get" action="/results" class="results-filter-form">
+      <input type="hidden" name="scenario" value="{escape(scenario_id)}">
+      <input type="hidden" name="session_id" value="{escape(selected_session_id)}">
+      <div class="results-filter-grid">
+        <div class="field">
+          <label for="results-search">Search Sessions</label>
+          <input id="results-search" name="search" type="text" value="{search_value}" placeholder="session id or recipe title">
+        </div>
+        <div class="field">
+          <label for="results-status">Status</label>
+          <select id="results-status" name="status">{status_options}</select>
+        </div>
+        <div class="field">
+          <label for="results-sort">Sort</label>
+          <select id="results-sort" name="sort">{sort_options}</select>
+        </div>
+      </div>
+      <div class="toolbar-row">
+        <button type="submit" class="secondary">Apply Filters</button>
+        <a class="button-link ghost" href="/results?scenario={escape(scenario_id)}">Reset</a>
+        <span class="filter-summary">Showing {filters.visible_session_count} of {filters.total_session_count} saved sessions.</span>
+      </div>
+    </form>"""
+
+
+def render_results_selected_context(page: ResultsPageModel, scenario_id: str) -> str:
+    if page.selected_session is None:
+        return """
+        <div class="panel">
+          <h3>Selected Session</h3>
+          <p class="panel-subtitle">Choose one saved session to inspect metrics, traces, artifacts, and downloads.</p>
+          <div class="placeholder-copy">No session is currently selected.</div>
+        </div>"""
+
+    card = page.selected_session
+    tone = "good" if card.replay_ready else ("warn" if card.failure_reason_label is None else "bad")
+    failure = (
+        f'<div class="small">Failure reason: {escape(card.failure_reason_label)}</div>'
+        if card.failure_reason_label
+        else ""
+    )
+    metrics = "".join(render_status_item(item) for item in page.selected_session_metrics) or (
+        '<div class="placeholder-copy">No session metrics are available.</div>'
+    )
+    actions = render_surface_action_row(page.toolbar_actions, scenario_id)
+    return f"""
+    <div class="panel selection-context">
+      <div>
+        <h3>Selected Session</h3>
+        <p class="panel-subtitle">Pinned saved-session context for trace review, artifacts, and follow-on actions.</p>
+      </div>
+      <div class="session-card selected">
+        <div><strong>{escape(card.recipe_title)}</strong></div>
+        <div><span class="status-label {tone}">{escape(card.status_label)}</span></div>
+        <div class="small">Session {escape(card.session_id)} updated {escape(card.updated_at.isoformat())}</div>
+        <div class="small">Primary raw {card.primary_raw_artifact_count} | Secondary monitor {card.secondary_monitor_artifact_count}</div>
+        <div class="small">Processed {card.processed_artifact_count} | Analysis {card.analysis_artifact_count} | Export {card.export_artifact_count}</div>
+        <div class="small">Events {card.event_count} | Replay {'ready' if card.replay_ready else 'unavailable'}</div>
+        {failure}
+      </div>
+      <div class="results-action-bar">
+        <form method="post" action="/experiment/session/open">
+          <input type="hidden" name="scenario" value="{escape(scenario_id)}">
+          <input type="hidden" name="recent_session_id" value="{escape(card.session_id)}">
+          <button type="submit" class="secondary">Reopen in Experiment</button>
+        </form>
+        {actions}
+      </div>
+      <div class="metric-grid">{metrics}</div>
+    </div>"""
+
+
+def render_results_trace_preview(preview: ResultsTracePreviewModel) -> str:
+    chart = (
+        f'<div class="trace-chart"><svg viewBox="0 0 320 132" preserveAspectRatio="none"><polyline points="{escape(preview.polyline_points or "")}"></polyline></svg></div>'
+        if preview.polyline_points
+        else ""
+    )
+    notes = "".join(f"<li>{escape(line)}</li>" for line in preview.note_lines)
+    notes_markup = f'<ul class="detail-list">{notes}</ul>' if notes else ""
+    return f"""
+    <div class="panel trace-card">
+      <div>
+        <h4>{escape(preview.title)}</h4>
+        <p class="panel-subtitle">{escape(preview.subtitle)}</p>
+      </div>
+      {render_page_state(preview.state)}
+      {chart}
+      <div class="trace-meta">
+        <div><strong>{escape(preview.sample_count_label)}</strong></div>
+        <div class="small">{escape(preview.axis_label)}</div>
+        <div class="small">Axis: {escape(preview.axis_start_label)} to {escape(preview.axis_end_label)}</div>
+        <div class="small">Value: {escape(preview.value_min_label)} to {escape(preview.value_max_label)}</div>
+      </div>
+      {notes_markup}
+    </div>"""
+
+
+def render_results_artifact_registry(rows: tuple[ResultsArtifactRowModel, ...], scenario_id: str) -> str:
+    if not rows:
+        return '<div class="placeholder-copy">Structured artifact entries appear when a session is selected.</div>'
+    rendered = "".join(render_results_artifact_row(row, scenario_id) for row in rows)
+    return f'<div class="artifact-list">{rendered}</div>'
+
+
+def render_results_artifact_row(row: ResultsArtifactRowModel, scenario_id: str) -> str:
+    details = "".join(f"<li>{escape(detail)}</li>" for detail in row.details)
+    details_markup = f'<ul class="detail-list">{details}</ul>' if details else ""
+    action = render_surface_action(row.download_action, scenario_id) if row.download_action is not None else ""
+    return f"""
+    <div class="artifact-row">
+      <div class="artifact-row-head">
+        <div class="artifact-row-meta">
+          <div><strong>{escape(row.kind_label)}</strong> · {escape(row.artifact_id)}</div>
+          <div class="small">{escape(row.source_label)}</div>
+          <div class="small">{escape(row.stream_label)}</div>
+        </div>
+        <div>{action}</div>
+      </div>
+      <div class="small">Created {escape(row.created_at.isoformat())} · {escape(row.records_label)}</div>
+      <div class="artifact-row-path"><code>{escape(row.path)}</code></div>
+      {details_markup}
     </div>"""
 
 
@@ -1281,7 +1566,7 @@ def render_session_card(card: SessionSummaryCard, scenario_id: str, *, target: s
     )
     analyze_link = f"/analyze?scenario={escape(scenario_id)}&session_id={escape(card.session_id)}"
     return f"""
-    <div class="session-card">
+    <div class="session-card{' selected' if card.selected else ''}">
       <div><strong>{escape(card.recipe_title)}</strong></div>
       <div><span class="status-label {tone}">{escape(card.status_label)}</span></div>
       <div class="small">Session {escape(card.session_id)} updated {escape(card.updated_at.isoformat())}</div>
@@ -1292,7 +1577,7 @@ def render_session_card(card: SessionSummaryCard, scenario_id: str, *, target: s
       <div class="toolbar-row">
         <form method="post" action="/experiment/session/open">
           <input type="hidden" name="scenario" value="{escape(scenario_id)}">
-          <input type="hidden" name="session_id" value="{escape(card.session_id)}">
+          <input type="hidden" name="recent_session_id" value="{escape(card.session_id)}">
           <button type="submit" class="secondary">Open in Experiment</button>
         </form>
         <a class="button-link {'secondary' if target == 'results' else 'ghost'}" href="/results?scenario={escape(scenario_id)}&session_id={escape(card.session_id)}">Open Results</a>

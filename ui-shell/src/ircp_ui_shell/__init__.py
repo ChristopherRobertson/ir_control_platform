@@ -1,7 +1,7 @@
 """UI-shell service boundaries."""
 
 from .app import IRCPUiApp, create_ui_app
-from .boundaries import UiCommandService, UiQueryService, UiRuntimeGateway
+from .boundaries import ResultsDownload, UiCommandService, UiQueryService, UiRuntimeGateway
 from .models import (
     ActionButtonModel,
     AdvancedPageModel,
@@ -17,7 +17,10 @@ from .models import (
     OperateDisclosureModel,
     OperatePageModel,
     OperatePanelModel,
+    ResultsArtifactRowModel,
+    ResultsFilterModel,
     ResultsPageModel,
+    ResultsTracePreviewModel,
     ScenarioOption,
     ServicePageModel,
     SessionSummaryCard,
@@ -47,7 +50,11 @@ __all__ = [
     "OperatePanelModel",
     "PageStateKind",
     "PageStateModel",
+    "ResultsArtifactRowModel",
+    "ResultsDownload",
+    "ResultsFilterModel",
     "ResultsPageModel",
+    "ResultsTracePreviewModel",
     "ScenarioOption",
     "ServicePageModel",
     "SessionSummaryCard",

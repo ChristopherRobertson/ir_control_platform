@@ -572,13 +572,68 @@ class OperatorFirstUiTests(unittest.TestCase):
         self.assertEqual(results_status, "200 OK")
         self.assertIn("Recent Sessions", results_body)
         self.assertIn("Artifacts and Provenance", results_body)
-        self.assertIn("Visualization and Overlay Review", results_body)
-        self.assertIn("Export From Persisted Session", results_body)
+        self.assertIn("Visualization and Trace Review", results_body)
+        self.assertIn("Download and Export", results_body)
+        self.assertIn("Apply Filters", results_body)
+        self.assertIn("Download Manifest", results_body)
 
         self.assertEqual(advanced_status, "200 OK")
         self.assertIn("Timing and marker detail", advanced_body)
         self.assertIn("Readiness Matrix", advanced_body)
         self.assertNotIn("Live Status", advanced_body)
+
+    def test_results_route_supports_filter_and_selection_states(self) -> None:
+        app = self._create_app()
+
+        filtered_status, _headers, filtered_body = _call_wsgi(
+            app,
+            method="GET",
+            path="/results?scenario=nominal&search=no-match",
+        )
+        invalid_status, _headers, invalid_body = _call_wsgi(
+            app,
+            method="GET",
+            path="/results?scenario=nominal&session_id=missing-session-999",
+        )
+        cleared_status, _headers, cleared_body = _call_wsgi(
+            app,
+            method="GET",
+            path="/results?scenario=nominal&session_id=__none__",
+        )
+
+        self.assertEqual(filtered_status, "200 OK")
+        self.assertIn("No sessions match the current filter", filtered_body)
+
+        self.assertEqual(invalid_status, "200 OK")
+        self.assertIn("Saved session not found", invalid_body)
+
+        self.assertEqual(cleared_status, "200 OK")
+        self.assertIn("No session selected", cleared_body)
+        self.assertIn("Choose one saved session to inspect metrics", cleared_body)
+
+    def test_results_download_routes_serve_manifest_and_events(self) -> None:
+        app = self._create_app()
+
+        manifest_status, manifest_headers, manifest_body = _call_wsgi(
+            app,
+            method="GET",
+            path="/results/download?scenario=nominal&session_id=saved-session-001&asset=manifest",
+        )
+        events_status, events_headers, events_body = _call_wsgi(
+            app,
+            method="GET",
+            path="/results/download?scenario=nominal&session_id=saved-session-001&asset=events",
+        )
+
+        self.assertEqual(manifest_status, "200 OK")
+        self.assertEqual(manifest_headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertIn('attachment; filename="saved-session-001-manifest.json"', manifest_headers["Content-Disposition"])
+        self.assertIn('"session_id": "saved-session-001"', manifest_body)
+
+        self.assertEqual(events_status, "200 OK")
+        self.assertEqual(events_headers["Content-Type"], "application/x-ndjson; charset=utf-8")
+        self.assertIn('attachment; filename="saved-session-001-events.ndjson"', events_headers["Content-Disposition"])
+        self.assertIn('"event_id": "saved-session-event-created"', events_body)
 
     def test_service_and_analyze_routes_remain_available_but_secondary(self) -> None:
         app = self._create_app()

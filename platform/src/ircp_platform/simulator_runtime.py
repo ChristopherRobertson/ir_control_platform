@@ -27,6 +27,7 @@ from ircp_ui_shell import (
     DeviceSummaryCard,
     HeaderStatus,
     OperatePageModel,
+    ResultsDownload,
     ResultsPageModel,
     ServicePageModel,
     UiRuntimeGateway,
@@ -59,10 +60,35 @@ from .page_builders import (
     build_service_page,
     device_card_from_status,
 )
+from .runtime_helpers import json_bytes, json_lines_bytes
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _results_session_matches(summary, *, search: str, status_filter: str) -> bool:
+    if status_filter != "all" and summary.status.value != status_filter:
+        return False
+    normalized_search = search.strip().casefold()
+    if not normalized_search:
+        return True
+    return normalized_search in summary.session_id.casefold() or normalized_search in summary.recipe_title.casefold()
+
+
+def _results_sort_key(summary, sort_order: str) -> tuple[object, ...]:
+    total_artifacts = (
+        summary.primary_raw_artifact_count
+        + summary.secondary_monitor_artifact_count
+        + summary.processed_artifact_count
+        + summary.analysis_artifact_count
+        + summary.export_artifact_count
+    )
+    if sort_order == "updated_asc":
+        return (summary.updated_at, summary.created_at, summary.session_id)
+    if sort_order == "artifacts_desc":
+        return (-total_artifacts, -summary.updated_at.timestamp(), summary.session_id)
+    return (-summary.updated_at.timestamp(), -summary.created_at.timestamp(), summary.session_id)
 
 
 class SimulatorUiRuntime(UiRuntimeGateway):
@@ -134,19 +160,118 @@ class SimulatorUiRuntime(UiRuntimeGateway):
             preflight=preflight,
         )
 
-    async def get_results_page(self, selected_session_id: str | None = None) -> ResultsPageModel:
+    async def get_results_page(
+        self,
+        selected_session_id: str | None = None,
+        *,
+        search: str = "",
+        status_filter: str = "all",
+        sort_order: str = "updated_desc",
+    ) -> ResultsPageModel:
         sessions = await self._session_catalog.list_sessions()
-        selected_id = selected_session_id or self._selected_session_id or (sessions[0].session_id if sessions else None)
+        filtered_sessions = tuple(
+            sorted(
+                (
+                    summary
+                    for summary in sessions
+                    if _results_session_matches(summary, search=search, status_filter=status_filter)
+                ),
+                key=lambda summary: _results_sort_key(summary, sort_order),
+            )
+        )
+        all_session_ids = {summary.session_id for summary in sessions}
+        visible_session_ids = {summary.session_id for summary in filtered_sessions}
+        selection_cleared = selected_session_id == "__none__"
+        invalid_selected_session_id: str | None = None
+        selection_hidden_by_filter = False
+        selected_id: str | None = None
+
+        if selection_cleared:
+            selected_id = None
+        elif selected_session_id is not None:
+            if selected_session_id in visible_session_ids:
+                selected_id = selected_session_id
+            elif selected_session_id in all_session_ids:
+                selection_hidden_by_filter = True
+            else:
+                invalid_selected_session_id = selected_session_id
+        elif self._selected_session_id in visible_session_ids:
+            selected_id = self._selected_session_id
+        elif filtered_sessions:
+            selected_id = filtered_sessions[0].session_id
+
         if selected_id is not None:
             self._selected_session_id = selected_id
-        detail = await self._session_catalog.get_session_detail(selected_id) if selected_id is not None else None
+        detail = (
+            await self._session_catalog.get_session_detail(selected_id)
+            if selected_id is not None and selected_id in visible_session_ids
+            else None
+        )
         return build_results_page(
             draft=self._draft,
             storage_root=self._storage_root,
-            sessions=sessions,
+            sessions=filtered_sessions,
+            total_session_count=len(sessions),
             selected_session_id=selected_id,
             detail=detail,
+            search_value=search.strip(),
+            status_filter=status_filter,
+            sort_order=sort_order,
+            invalid_selected_session_id=invalid_selected_session_id,
+            selection_hidden_by_filter=selection_hidden_by_filter,
+            selection_cleared=selection_cleared,
         )
+
+    async def get_results_download(
+        self,
+        session_id: str,
+        *,
+        asset: str | None = None,
+        artifact_id: str | None = None,
+    ) -> ResultsDownload:
+        detail = await self._session_catalog.get_session_detail(session_id)
+        if artifact_id is not None:
+            artifact = next(
+                (
+                    candidate
+                    for candidate in (
+                        *detail.primary_raw_artifacts,
+                        *detail.secondary_monitor_artifacts,
+                        *detail.processed_artifacts,
+                        *detail.analysis_artifacts,
+                        *detail.export_artifacts,
+                    )
+                    if candidate.artifact_id == artifact_id
+                ),
+                None,
+            )
+            if artifact is None:
+                raise KeyError(f"Unknown artifact id for session {session_id}: {artifact_id}")
+            payload_path = self._resolve_results_path(artifact.relative_path)
+            if not payload_path.is_file():
+                raise FileNotFoundError(
+                    f"Artifact payload is not available for download: {artifact.relative_path}"
+                )
+            return ResultsDownload(
+                filename=payload_path.name,
+                content_type=artifact.content_type or "application/octet-stream",
+                body=payload_path.read_bytes(),
+            )
+
+        asset_name = asset or "manifest"
+        if asset_name == "manifest":
+            return ResultsDownload(
+                filename=f"{session_id}-manifest.json",
+                content_type="application/json; charset=utf-8",
+                body=json_bytes(detail.manifest),
+            )
+        if asset_name == "events":
+            return ResultsDownload(
+                filename=f"{session_id}-events.ndjson",
+                content_type="application/x-ndjson; charset=utf-8",
+                body=json_lines_bytes(detail.event_timeline),
+            )
+        raise ValueError(f"Unknown results download asset: {asset_name}")
 
     async def get_analyze_page(self, selected_session_id: str | None = None) -> AnalyzePageModel:
         sessions = await self._session_catalog.list_sessions()
@@ -443,6 +568,17 @@ class SimulatorUiRuntime(UiRuntimeGateway):
 
     async def reopen_session(self, session_id: str) -> SessionManifest:
         return await self.open_saved_session(session_id)
+
+    def _resolve_results_path(self, relative_path: str) -> Path:
+        candidate = Path(relative_path)
+        if candidate.is_absolute():
+            raise ValueError(f"Artifact paths must stay relative to the runtime root: {relative_path}")
+        resolved = (self._storage_root / candidate).resolve()
+        try:
+            resolved.relative_to(self._storage_root)
+        except ValueError as exc:
+            raise ValueError(f"Artifact path escapes the runtime root: {relative_path}") from exc
+        return resolved
 
     def _current_recipe(self) -> ExperimentRecipe:
         return build_recipe(self._draft, self._scenario)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from ircp_contracts import DeviceStatus, PreflightReport, RunPhase, RunState, SessionStatus
@@ -21,7 +22,10 @@ from ircp_ui_shell import (
     OperatePageModel,
     OperatePanelModel,
     PageStateModel,
+    ResultsArtifactRowModel,
+    ResultsFilterModel,
     ResultsPageModel,
+    ResultsTracePreviewModel,
     ServicePageModel,
     SessionSummaryCard,
     StatusBadge,
@@ -191,38 +195,80 @@ def build_results_page(
     draft: OperatorDraftState,
     storage_root: Path,
     sessions: tuple[SessionSummary, ...],
+    total_session_count: int,
     selected_session_id: str | None,
     detail: SessionDetail | None,
+    search_value: str = "",
+    status_filter: str = "all",
+    sort_order: str = "updated_desc",
+    invalid_selected_session_id: str | None = None,
+    selection_hidden_by_filter: bool = False,
+    selection_cleared: bool = False,
 ) -> ResultsPageModel:
     session_cards = _session_cards(sessions, selected_session_id)
     selected_session = next((card for card in session_cards if card.session_id == selected_session_id), None)
     page_state: PageStateModel | None = None
+    selected_session_metrics: tuple[StatusItemModel, ...] = ()
     detail_panels: tuple[SummaryPanel, ...] = ()
     artifact_panels: tuple[SummaryPanel, ...] = ()
+    artifact_rows: tuple[ResultsArtifactRowModel, ...] = ()
     visualization_panels: tuple[SummaryPanel, ...] = ()
+    trace_previews: tuple[ResultsTracePreviewModel, ...] = ()
     storage_panels: tuple[SummaryPanel, ...] = ()
     export_panels: tuple[SummaryPanel, ...] = ()
     event_log: tuple[EventLogItem, ...] = ()
 
-    if not session_cards:
+    if total_session_count == 0:
         page_state = empty_state(
             "No saved sessions",
             "This simulator scenario has not persisted a session yet.",
             details=("Nominal scenarios seed one saved fixture and new runs create more.",),
         )
+    elif invalid_selected_session_id is not None:
+        page_state = fault_state(
+            "Saved session not found",
+            "The requested session is not available in the persisted catalog.",
+            details=(f"Requested session: {invalid_selected_session_id}",),
+        )
+    elif not session_cards:
+        page_state = empty_state(
+            "No sessions match the current filter",
+            "Adjust the search or status filter to inspect a saved session.",
+            details=(f"Search: {search_value or 'none'}", f"Status filter: {status_filter}"),
+        )
+    elif selection_hidden_by_filter:
+        page_state = empty_state(
+            "Selected session hidden by the current filter",
+            "The active search or status filter removed the selected session from the visible list.",
+            details=(
+                f"Session: {selected_session_id}",
+                "Clear the current selection or widen the filter to keep reviewing it.",
+            ),
+        )
+    elif selection_cleared or selected_session_id is None:
+        page_state = empty_state(
+            "No session selected",
+            "Choose a saved session from the run history to inspect persisted results and artifacts.",
+            details=("Session history stays visible so you can browse without reopening a run.",),
+        )
     elif selected_session_id is not None and detail is not None:
+        selected_session_metrics = _results_selected_session_metrics(detail)
         detail_panels = _detail_panels_from_session_detail(detail)
         artifact_panels = _artifact_panels_from_session_detail(detail)
+        artifact_rows = _results_artifact_rows(detail, storage_root)
         visualization_panels = _results_visualization_panels(detail)
+        trace_previews = _results_trace_previews(detail, storage_root)
         storage_panels = (
             SummaryPanel(
                 title="Saved paths",
-                subtitle="Basic durable session details available now.",
+                subtitle="Durable session files and reopen inputs for this selection.",
                 items=(
                     f"Session directory: {_session_dir(storage_root, selected_session_id)}",
                     f"Manifest: {_manifest_path(storage_root, selected_session_id)}",
                     f"Events: {_events_path(storage_root, selected_session_id)}",
                     f"Replay ready: {'yes' if detail.summary.replay_ready else 'no'}",
+                    f"Device snapshots: {len(detail.manifest.device_status_snapshot)}",
+                    f"Session notes: {len(detail.manifest.notes)}",
                 ),
             ),
         )
@@ -264,11 +310,21 @@ def build_results_page(
         subtitle="Persisted-session review surface for visualizations, overlays, provenance, and export handoff without turning this into live control.",
         state=page_state,
         surface_badges=_surface_badges("results", draft),
+        filters=_results_filters(
+            search_value=search_value,
+            status_filter=status_filter,
+            sort_order=sort_order,
+            visible_session_count=len(session_cards),
+            total_session_count=total_session_count,
+        ),
         sessions=session_cards,
         selected_session=selected_session,
+        selected_session_metrics=selected_session_metrics,
         detail_panels=detail_panels,
         artifact_panels=artifact_panels,
+        artifact_rows=artifact_rows,
         visualization_panels=visualization_panels,
+        trace_previews=trace_previews,
         storage_panels=storage_panels if selected_session_id is not None else (),
         export_panels=export_panels,
         toolbar_actions=_results_toolbar_actions(selected_session_id),
@@ -1057,36 +1113,104 @@ def _session_cards(
     )
 
 
+def _results_filters(
+    *,
+    search_value: str,
+    status_filter: str,
+    sort_order: str,
+    visible_session_count: int,
+    total_session_count: int,
+) -> ResultsFilterModel:
+    return ResultsFilterModel(
+        search_value=search_value,
+        status_options=(
+            FormOptionModel(value="all", label="All Statuses", selected=status_filter == "all"),
+            FormOptionModel(value="completed", label="Completed", selected=status_filter == "completed"),
+            FormOptionModel(value="faulted", label="Faulted", selected=status_filter == "faulted"),
+            FormOptionModel(value="aborted", label="Aborted", selected=status_filter == "aborted"),
+            FormOptionModel(value="planned", label="Planned", selected=status_filter == "planned"),
+            FormOptionModel(value="active", label="Active", selected=status_filter == "active"),
+        ),
+        sort_options=(
+            FormOptionModel(value="updated_desc", label="Newest First", selected=sort_order == "updated_desc"),
+            FormOptionModel(value="updated_asc", label="Oldest First", selected=sort_order == "updated_asc"),
+            FormOptionModel(value="artifacts_desc", label="Most Artifacts", selected=sort_order == "artifacts_desc"),
+        ),
+        visible_session_count=visible_session_count,
+        total_session_count=total_session_count,
+    )
+
+
+def _results_selected_session_metrics(detail: SessionDetail) -> tuple[StatusItemModel, ...]:
+    total_artifacts = (
+        len(detail.primary_raw_artifacts)
+        + len(detail.secondary_monitor_artifacts)
+        + len(detail.processed_artifacts)
+        + len(detail.analysis_artifacts)
+        + len(detail.export_artifacts)
+    )
+    last_event = detail.summary.last_event_at.isoformat() if detail.summary.last_event_at is not None else "n/a"
+    return (
+        StatusItemModel(
+            label="Status",
+            value=detail.summary.status.value.title(),
+            tone=_session_status_tone(detail.summary.status),
+            detail=f"Updated {detail.summary.updated_at.isoformat()}",
+        ),
+        StatusItemModel(
+            label="Replay",
+            value="Ready" if detail.summary.replay_ready else "Unavailable",
+            tone="good" if detail.summary.replay_ready else "warn",
+            detail=f"Primary inputs {len(detail.replay_plan.primary_raw_artifact_ids)}",
+        ),
+        StatusItemModel(
+            label="Artifacts",
+            value=str(total_artifacts),
+            tone="neutral",
+            detail=(
+                f"{len(detail.primary_raw_artifacts)} raw / {len(detail.processed_artifacts)} processed / "
+                f"{len(detail.analysis_artifacts)} analysis / {len(detail.export_artifacts)} export"
+            ),
+        ),
+        StatusItemModel(
+            label="Timeline",
+            value=f"{detail.summary.event_count} events",
+            tone="neutral",
+            detail=f"Last event {last_event}",
+        ),
+    )
+
+
 def _detail_panels_from_session_detail(detail: SessionDetail) -> tuple[SummaryPanel, ...]:
     manifest = detail.manifest
     return (
         SummaryPanel(
-            title="Manifest Summary",
-            subtitle="Session-centered authority for reopen and replay.",
+            title="Run Summary",
+            subtitle="Session-centered identity and terminal state.",
             items=(
                 f"Session: {manifest.session_id}",
-                f"Status: {manifest.status.value}",
+                f"Status: {manifest.status.value.title()}",
                 f"Recipe: {manifest.recipe_snapshot.title}",
                 f"Replay ready: {'yes' if detail.summary.replay_ready else 'no'}",
-                f"Events persisted: {detail.summary.event_count}",
-                f"Primary raw artifacts: {len(manifest.primary_raw_artifacts())}",
-                f"Secondary monitor artifacts: {len(manifest.secondary_monitor_artifacts())}",
+                f"Created: {detail.summary.created_at.isoformat()}",
+                f"Updated: {detail.summary.updated_at.isoformat()}",
             ),
         ),
         SummaryPanel(
             title="Outcome and Replay",
-            subtitle="Explicit persisted terminal state and replay inputs.",
+            subtitle="Persisted outcome and saved reopen inputs only.",
             items=(
                 f"Run started: {manifest.outcome.started_at.isoformat() if manifest.outcome.started_at else 'n/a'}",
                 f"Run ended: {manifest.outcome.ended_at.isoformat() if manifest.outcome.ended_at else 'n/a'}",
                 f"Failure reason: {manifest.outcome.failure_reason.value if manifest.outcome.failure_reason else 'none'}",
                 f"Final event: {manifest.outcome.final_event_id or 'n/a'}",
                 f"Primary replay inputs: {len(detail.replay_plan.primary_raw_artifact_ids)}",
+                f"Secondary replay inputs: {len(detail.replay_plan.secondary_monitor_artifact_ids)}",
             ),
         ),
         SummaryPanel(
-            title="Timing and Routing",
-            subtitle="Persisted context required to interpret the saved run.",
+            title="Acquisition Context",
+            subtitle="Timing, routing, and acquisition settings that explain the saved run.",
             items=(
                 f"T0 label: {manifest.timing_summary.t0_label}",
                 f"Pump shots before probe: {manifest.pump_probe_summary.pump_shots_before_probe}",
@@ -1096,10 +1220,10 @@ def _detail_panels_from_session_detail(detail: SessionDetail) -> tuple[SummaryPa
             ),
         ),
         SummaryPanel(
-            title="Markers and Artifacts",
-            subtitle="Saved markers, monitor routing, and artifact authority split.",
+            title="Markers and Provenance",
+            subtitle="Saved markers, monitor routing, and provenance metadata for review.",
             items=(
-                f"Markers: {', '.join(manifest.selected_markers)}",
+                f"Markers: {', '.join(manifest.selected_markers) if manifest.selected_markers else 'none'}",
                 f"Pico mode: {manifest.pico_summary.mode.value}",
                 (
                     "Pico trigger: "
@@ -1174,6 +1298,13 @@ def _results_toolbar_actions(selected_session_id: str | None) -> tuple[SurfaceAc
             tone="secondary",
             helper_text="Scientific evaluation starts from the saved session you are already reviewing.",
         ),
+        SurfaceActionModel(
+            label="Clear Selection",
+            route="results",
+            tone="ghost",
+            helper_text="Keep the session history visible without pinning one selection.",
+            query_params=(("session_id", "__none__"),),
+        ),
     )
 
 
@@ -1181,13 +1312,14 @@ def _results_visualization_panels(detail: SessionDetail) -> tuple[SummaryPanel, 
     manifest = detail.manifest
     return (
         SummaryPanel(
-            title="Visualization Review",
-            subtitle="Results owns the persisted plots and final visual review, not the Experiment control page.",
+            title="Trace Coverage",
+            subtitle="Results owns persisted trace review without pulling live device state back in.",
             items=(
                 f"Primary HF2 traces available: {len(detail.primary_raw_artifacts)}",
+                f"Secondary monitor traces available: {len(detail.secondary_monitor_artifacts)}",
                 f"Processed traces available: {len(detail.processed_artifacts)}",
                 f"Saved replay readiness: {'yes' if detail.summary.replay_ready else 'no'}",
-                f"Selected session status: {detail.summary.status.value}",
+                f"Selected session status: {detail.summary.status.value.title()}",
             ),
         ),
         SummaryPanel(
@@ -1209,23 +1341,23 @@ def _results_visualization_panels(detail: SessionDetail) -> tuple[SummaryPanel, 
 def _results_export_panels(detail: SessionDetail) -> tuple[SummaryPanel, ...]:
     return (
         SummaryPanel(
-            title="Export Readiness",
-            subtitle="Exports remain reproducible because they start from persisted artifacts instead of live hardware state.",
+            title="Download Readiness",
+            subtitle="Downloads can come from persisted manifests, events, and artifact files without live hardware.",
             items=(
-                f"Primary raw source artifacts: {len(detail.primary_raw_artifacts)}",
-                f"Processed source artifacts: {len(detail.processed_artifacts)}",
-                f"Analysis source artifacts: {len(detail.analysis_artifacts)}",
+                f"Manifest available: yes",
+                f"Event log entries: {len(detail.event_timeline)}",
+                f"Artifact rows listed: {len(detail.primary_raw_artifacts) + len(detail.secondary_monitor_artifacts) + len(detail.processed_artifacts) + len(detail.analysis_artifacts) + len(detail.export_artifacts)}",
                 f"Saved export artifacts: {len(detail.export_artifacts)}",
             ),
         ),
         SummaryPanel(
-            title="Export Provenance",
-            subtitle="Recorded export outputs stay tied to saved inputs and final session state.",
+            title="Unsupported Actions Stay Explicit",
+            subtitle="Replay, reprocess, and report generation remain disabled until dedicated backend owners are wired.",
             items=(
                 f"Selected session: {detail.manifest.session_id}",
-                f"Final event id: {detail.manifest.outcome.final_event_id or 'n/a'}",
+                f"Replay ready: {'yes' if detail.summary.replay_ready else 'no'}",
                 f"Failure reason: {detail.manifest.outcome.failure_reason.value if detail.manifest.outcome.failure_reason else 'none'}",
-                "Export scope remains session-centered and reproducible outside the UI.",
+                "Results shows disabled states instead of pretending unsupported processing and report workflows are complete.",
             ),
         ),
     )
@@ -1236,25 +1368,355 @@ def _results_export_actions(
     detail: SessionDetail | None,
 ) -> tuple[SurfaceActionModel, ...]:
     disabled = selected_session_id is None or detail is None
-    helper = (
-        "Select a saved session first."
-        if disabled
-        else "Placeholder only for now. Final export actions will run from persisted artifacts through the reports boundary."
-    )
     return (
         SurfaceActionModel(
-            label="Generate Session Report",
-            tone="primary",
-            disabled=True,
-            helper_text=helper,
+            label="Download Manifest",
+            route="results/download",
+            tone="secondary",
+            session_id=selected_session_id,
+            disabled=disabled,
+            helper_text="Download the authoritative saved manifest for this session.",
+            query_params=(("asset", "manifest"),),
         ),
         SurfaceActionModel(
-            label="Export Artifact Bundle",
+            label="Download Event Log",
+            route="results/download",
+            tone="secondary",
+            session_id=selected_session_id,
+            disabled=disabled,
+            helper_text="Download the persisted event timeline as newline-delimited JSON.",
+            query_params=(("asset", "events"),),
+        ),
+        SurfaceActionModel(
+            label="Replay Saved Session",
+            tone="primary",
+            disabled=True,
+            helper_text=(
+                "Select a saved session first."
+                if disabled
+                else "Replay is not exposed as a Results action yet. Reopen the session in Experiment instead."
+            ),
+        ),
+        SurfaceActionModel(
+            label="Reprocess Saved Data",
             tone="ghost",
             disabled=True,
-            helper_text="Export remains a Results-owned action and will never read live device state.",
+            helper_text=(
+                "Select a saved session first."
+                if disabled
+                else "Reprocessing is reserved for a later Analyze/backend pass."
+            ),
+        ),
+        SurfaceActionModel(
+            label="Generate Session Report",
+            tone="ghost",
+            disabled=True,
+            helper_text=(
+                "Select a saved session first."
+                if disabled
+                else "Report generation is intentionally disabled until the reports boundary is wired."
+            ),
         ),
     )
+
+
+def _results_artifact_rows(
+    detail: SessionDetail,
+    storage_root: Path,
+) -> tuple[ResultsArtifactRowModel, ...]:
+    rows: list[ResultsArtifactRowModel] = []
+    groups = (
+        ("Primary Raw", detail.primary_raw_artifacts),
+        ("Secondary Monitor", detail.secondary_monitor_artifacts),
+        ("Processed", detail.processed_artifacts),
+        ("Analysis", detail.analysis_artifacts),
+        ("Export", detail.export_artifacts),
+    )
+    for kind_label, artifacts in groups:
+        for artifact in artifacts:
+            source_bits = []
+            if artifact.source_role is not None:
+                source_bits.append(artifact.source_role.value.replace("_", " ").title())
+            if artifact.device_kind is not None:
+                source_bits.append(artifact.device_kind.value)
+            source_label = " / ".join(source_bits) or kind_label
+            details = tuple(
+                bit
+                for bit in (
+                    f"Content type: {artifact.content_type or 'unknown'}",
+                    f"Registered by: {artifact.registered_by_event_id}" if artifact.registered_by_event_id else None,
+                    f"Mux target: {artifact.mux_output_target}" if artifact.mux_output_target else None,
+                    f"Marker: {artifact.related_marker}" if artifact.related_marker else None,
+                )
+                if bit is not None
+            )
+            rows.append(
+                ResultsArtifactRowModel(
+                    kind_label=kind_label,
+                    artifact_id=artifact.artifact_id,
+                    source_label=source_label,
+                    stream_label=artifact.stream_name or artifact.relative_path.rsplit("/", 1)[-1],
+                    records_label=(
+                        f"{artifact.record_count} rows"
+                        if artifact.record_count is not None
+                        else "Record count unavailable"
+                    ),
+                    created_at=artifact.created_at,
+                    path=artifact.relative_path,
+                    details=details,
+                    download_action=_results_artifact_download_action(
+                        detail.manifest.session_id,
+                        artifact.artifact_id,
+                        artifact.relative_path,
+                        storage_root,
+                    ),
+                )
+            )
+    return tuple(rows)
+
+
+def _results_artifact_download_action(
+    session_id: str,
+    artifact_id: str,
+    relative_path: str,
+    storage_root: Path,
+) -> SurfaceActionModel:
+    artifact_path = _artifact_file_path(storage_root, relative_path)
+    if artifact_path is not None and artifact_path.is_file():
+        return SurfaceActionModel(
+            label="Download",
+            route="results/download",
+            session_id=session_id,
+            tone="secondary",
+            helper_text="Download the persisted artifact file.",
+            query_params=(("artifact_id", artifact_id),),
+        )
+    return SurfaceActionModel(
+        label="Unavailable",
+        tone="ghost",
+        disabled=True,
+        helper_text="This runtime does not have a persisted file available for this artifact.",
+    )
+
+
+def _results_trace_previews(
+    detail: SessionDetail,
+    storage_root: Path,
+) -> tuple[ResultsTracePreviewModel, ...]:
+    previews: list[ResultsTracePreviewModel] = []
+    raw_artifacts = (
+        *(("Primary Trace", artifact) for artifact in detail.primary_raw_artifacts[:2]),
+        *(("Secondary Monitor", artifact) for artifact in detail.secondary_monitor_artifacts[:1]),
+    )
+    for label, artifact in raw_artifacts:
+        previews.append(_trace_preview_from_artifact(label, artifact, storage_root))
+    return tuple(previews)
+
+
+def _trace_preview_from_artifact(
+    label: str,
+    artifact,
+    storage_root: Path,
+) -> ResultsTracePreviewModel:
+    artifact_path = _artifact_file_path(storage_root, artifact.relative_path)
+    title = f"{label} — {artifact.stream_name or artifact.artifact_id}"
+    subtitle = "Persisted raw-trace preview built from the saved artifact payload."
+    if artifact_path is None or not artifact_path.is_file():
+        return ResultsTracePreviewModel(
+            title=title,
+            subtitle=subtitle,
+            sample_count_label="No preview available",
+            axis_label="Axis unavailable",
+            axis_start_label="n/a",
+            axis_end_label="n/a",
+            value_min_label="n/a",
+            value_max_label="n/a",
+            note_lines=(artifact.relative_path,),
+            state=unavailable_state(
+                "Artifact file unavailable",
+                "The persisted artifact summary exists, but this runtime does not have the payload file on disk.",
+            ),
+        )
+    if artifact_path.suffix != ".parquet":
+        return ResultsTracePreviewModel(
+            title=title,
+            subtitle=subtitle,
+            sample_count_label="Preview unsupported",
+            axis_label="Axis unavailable",
+            axis_start_label="n/a",
+            axis_end_label="n/a",
+            value_min_label="n/a",
+            value_max_label="n/a",
+            note_lines=(artifact.relative_path,),
+            state=unavailable_state(
+                "Preview unsupported",
+                "Results trace previews are currently limited to persisted Parquet raw artifacts.",
+            ),
+        )
+    try:
+        import pyarrow.parquet as pq  # type: ignore[reportMissingImports]
+    except ModuleNotFoundError:
+        return ResultsTracePreviewModel(
+            title=title,
+            subtitle=subtitle,
+            sample_count_label="Preview unavailable",
+            axis_label="Axis unavailable",
+            axis_start_label="n/a",
+            axis_end_label="n/a",
+            value_min_label="n/a",
+            value_max_label="n/a",
+            note_lines=(artifact.relative_path,),
+            state=unavailable_state(
+                "Preview dependency unavailable",
+                "Parquet preview rendering requires pyarrow in this environment.",
+            ),
+        )
+    try:
+        rows = pq.read_table(artifact_path).to_pylist()
+    except Exception as exc:
+        return ResultsTracePreviewModel(
+            title=title,
+            subtitle=subtitle,
+            sample_count_label="Preview unavailable",
+            axis_label="Axis unavailable",
+            axis_start_label="n/a",
+            axis_end_label="n/a",
+            value_min_label="n/a",
+            value_max_label="n/a",
+            note_lines=(artifact.relative_path,),
+            state=unavailable_state(
+                "Preview load failed",
+                "The persisted artifact file could not be read for preview.",
+                details=(str(exc),),
+            ),
+        )
+
+    numeric_rows = [
+        row
+        for row in rows
+        if _coerce_float(row.get("axis_value")) is not None and _coerce_float(row.get("value")) is not None
+    ]
+    if not numeric_rows:
+        return ResultsTracePreviewModel(
+            title=title,
+            subtitle=subtitle,
+            sample_count_label="0 samples",
+            axis_label="Axis unavailable",
+            axis_start_label="n/a",
+            axis_end_label="n/a",
+            value_min_label="n/a",
+            value_max_label="n/a",
+            note_lines=(artifact.relative_path,),
+            state=empty_state(
+                "No preview samples",
+                "The artifact file exists, but it does not contain numeric axis/value rows that can be previewed.",
+            ),
+        )
+
+    points = tuple(
+        (
+            float(_coerce_float(row["axis_value"])),
+            float(_coerce_float(row["value"])),
+        )
+        for row in numeric_rows
+    )
+    sampled_points = _downsample_points(points)
+    axis_values = tuple(point[0] for point in points)
+    y_values = tuple(point[1] for point in points)
+    first_row = numeric_rows[0]
+    axis_label = str(first_row.get("axis_label") or "Axis")
+    axis_units = str(first_row.get("axis_units") or "")
+    value_units = str(first_row.get("units") or "")
+    notes = (
+        f"Artifact {artifact.artifact_id}",
+        artifact.relative_path,
+        f"Source role {artifact.source_role.value}" if artifact.source_role is not None else "Source role unknown",
+    )
+    return ResultsTracePreviewModel(
+        title=title,
+        subtitle=subtitle,
+        sample_count_label=f"{len(points)} samples",
+        axis_label=f"{axis_label} ({axis_units})" if axis_units else axis_label,
+        axis_start_label=_format_measurement(min(axis_values), axis_units),
+        axis_end_label=_format_measurement(max(axis_values), axis_units),
+        value_min_label=_format_measurement(min(y_values), value_units),
+        value_max_label=_format_measurement(max(y_values), value_units),
+        polyline_points=_sparkline_points(sampled_points),
+        note_lines=notes,
+    )
+
+
+def _downsample_points(points: tuple[tuple[float, float], ...], max_points: int = 72) -> tuple[tuple[float, float], ...]:
+    if len(points) <= max_points:
+        return points
+    step = max(1, math.ceil(len(points) / max_points))
+    sampled = points[::step]
+    if sampled[-1] != points[-1]:
+        sampled = (*sampled, points[-1])
+    return sampled
+
+
+def _sparkline_points(points: tuple[tuple[float, float], ...]) -> str:
+    if not points:
+        return ""
+    x_values = tuple(point[0] for point in points)
+    y_values = tuple(point[1] for point in points)
+    min_x = min(x_values)
+    max_x = max(x_values)
+    min_y = min(y_values)
+    max_y = max(y_values)
+    width = 320.0
+    height = 120.0
+    x_span = max(max_x - min_x, 1e-9)
+    y_span = max(max_y - min_y, 1e-9)
+    if max_x == min_x:
+        x_positions = tuple(width * index / max(len(points) - 1, 1) for index in range(len(points)))
+    else:
+        x_positions = tuple(((x - min_x) / x_span) * width for x in x_values)
+    return " ".join(
+        f"{x:.1f},{height - (((y - min_y) / y_span) * height):.1f}"
+        for x, y in zip(x_positions, y_values, strict=True)
+    )
+
+
+def _coerce_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_measurement(value: float, units: str) -> str:
+    rendered = f"{value:.3f}".rstrip("0").rstrip(".")
+    return f"{rendered} {units}".strip()
+
+
+def _artifact_file_path(storage_root: Path, relative_path: str) -> Path | None:
+    candidate = Path(relative_path)
+    if candidate.is_absolute():
+        return None
+    resolved = (storage_root / candidate).resolve()
+    try:
+        resolved.relative_to(storage_root)
+    except ValueError:
+        return None
+    return resolved
+
+
+def _session_status_tone(status: SessionStatus) -> str:
+    if status == SessionStatus.COMPLETED:
+        return "good"
+    if status == SessionStatus.FAULTED:
+        return "bad"
+    if status == SessionStatus.ABORTED:
+        return "warn"
+    return "neutral"
 
 
 def _results_callouts(
