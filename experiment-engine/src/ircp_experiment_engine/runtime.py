@@ -407,7 +407,14 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
         session_id: str,
     ) -> RunState:
         if session_id not in self._session_manifests:
-            raise KeyError(f"Session {session_id} must exist before start_run().")
+            reopened = await self._session_replayer.open_session(
+                SessionOpenRequest(
+                    session_id=session_id,
+                    requested_at=_utc_now(),
+                    reopen_for_replay=True,
+                )
+            )
+            self._session_manifests[session_id] = reopened.manifest
 
         preflight = await self._preflight_validator.validate(recipe, preset, self._drivers)
         if not preflight.ready_to_start:

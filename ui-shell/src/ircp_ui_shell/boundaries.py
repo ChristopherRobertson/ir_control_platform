@@ -7,7 +7,16 @@ from typing import Protocol, runtime_checkable
 
 from ircp_contracts import DeviceConfiguration, DeviceStatus, PreflightReport, RunState, SessionManifest
 
-from .models import AnalyzePageModel, AdvancedPageModel, HeaderStatus, OperatePageModel, ResultsPageModel, ServicePageModel
+from .models import (
+    AnalyzePageModel,
+    AdvancedPageModel,
+    HeaderStatus,
+    OperatePageModel,
+    ResultsPageModel,
+    RunPageModel,
+    ServicePageModel,
+    SetupPageModel,
+)
 
 
 @dataclass(frozen=True)
@@ -24,7 +33,15 @@ class UiQueryService(Protocol):
         ...
 
     async def get_operate_page(self) -> OperatePageModel:
-        """Return the default operator-first page model."""
+        """Return the default Experiment mission-control page model."""
+        ...
+
+    async def get_setup_page(self) -> SetupPageModel:
+        """Return the focused Setup page model for experiment preparation."""
+        ...
+
+    async def get_run_page(self) -> RunPageModel:
+        """Return the focused Run page model for live execution review."""
         ...
 
     async def get_results_page(

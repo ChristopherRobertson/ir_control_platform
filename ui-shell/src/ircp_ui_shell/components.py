@@ -22,13 +22,16 @@ from .models import (
     ResultsFilterModel,
     ResultsPageModel,
     ResultsTracePreviewModel,
+    RunPageModel,
     ServicePageModel,
     SessionSummaryCard,
+    SetupPageModel,
     StatusBadge,
     StatusItemModel,
     SummaryPanel,
     SurfaceActionModel,
     TableModel,
+    TracePreviewModel,
 )
 from .page_state import PageStateModel
 
@@ -237,6 +240,7 @@ main {
 }
 
 .state-box { margin-bottom: 16px; }
+.state-box.success { background: var(--good-bg); border-color: var(--good-border); }
 .state-box.blocked, .callout.warn { background: var(--warn-bg); border-color: var(--warn-border); }
 .state-box.warning { background: var(--warn-bg); border-color: var(--warn-border); }
 .state-box.fault, .callout.bad { background: var(--bad-bg); border-color: var(--bad-border); }
@@ -324,6 +328,12 @@ button:disabled, .button-link.disabled {
 .status-grid {
   display: grid;
   gap: 10px;
+}
+
+.device-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .status-item, .device-card, .session-card, .summary-row, .event-row {
@@ -912,10 +922,12 @@ def render_layout(header: HeaderStatus, body: str) -> str:
 
 
 def render_header(header: HeaderStatus) -> str:
+    active_route = escape(header.active_route or "experiment")
     scenarios = "".join(
         (
             f'<a class="scenario-chip{" active" if option.active else ""}" '
-            f'href="/experiment?scenario={escape(option.scenario_id)}">{escape(option.label)}</a>'
+            f'title="{escape(option.description)}" '
+            f'href="/{active_route}?scenario={escape(option.scenario_id)}">{escape(option.label)}</a>'
         )
         for option in header.scenario_options
     )
@@ -976,10 +988,30 @@ def render_callout(callout: CalloutModel) -> str:
 
 def render_operate_page(page: OperatePageModel, scenario_id: str) -> str:
     results_handoff = render_surface_handoff(page.results_handoff, scenario_id)
+    summary_metrics = "".join(render_status_item(item) for item in page.summary_metrics)
+    configuration = "".join(render_summary_panel(panel) for panel in page.configuration_panels)
+    hardware = render_device_grid(page.hardware_cards)
+    live_data = "".join(render_trace_preview(preview) for preview in page.live_data_previews) or (
+        '<div class="placeholder-copy">Start a run to populate authoritative live-trace previews.</div>'
+    )
+    events = render_event_log(page.event_log)
     return f"""
     <div class="page-stack">
-      {render_page_state(page.state)}
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
+        <h2>{escape(page.title)}</h2>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {render_surface_action_row(page.workflow_actions, scenario_id)}
+        <div class="metric-grid">{summary_metrics}</div>
+        {render_page_state(page.state)}
+      </section>
+      {render_callouts(page.callouts)}
       {results_handoff}
+      <section class="panel">
+        <h3>Current Configuration</h3>
+        <p class="panel-subtitle">What the operator is preparing right now, before moving into focused Setup or Run workspaces.</p>
+        <div class="panel-grid">{configuration}</div>
+      </section>
       {render_operate_panel(page.session_panel, scenario_id)}
       {render_operate_panel(page.laser_panel, scenario_id)}
       <section class="panel-grid">
@@ -987,6 +1019,111 @@ def render_operate_page(page: OperatePageModel, scenario_id: str) -> str:
         {render_operate_panel(page.acquisition_panel, scenario_id)}
       </section>
       {render_operate_panel(page.run_panel, scenario_id)}
+      <section class="panel-grid">
+        <div class="panel">
+          <h3>Hardware Visibility</h3>
+          <p class="panel-subtitle">Current subsystem posture without turning the UI into device consoles.</p>
+          {hardware}
+        </div>
+        <div class="panel">
+          <h3>Recent Activity</h3>
+          <p class="panel-subtitle">Authoritative events emitted by the latest run timeline.</p>
+          {events}
+        </div>
+      </section>
+      <section class="panel">
+        <h3>Live Data</h3>
+        <p class="panel-subtitle">Run-time trace previews stay reviewable here while full persisted analysis remains downstream.</p>
+        <div class="trace-grid">{live_data}</div>
+      </section>
+    </div>"""
+
+
+def render_setup_page(page: SetupPageModel, scenario_id: str) -> str:
+    summary_metrics = "".join(render_status_item(item) for item in page.summary_metrics)
+    readiness = "".join(render_summary_panel(panel) for panel in page.readiness_panels)
+    hardware = render_device_grid(page.hardware_cards)
+    advanced = "".join(render_advanced_section(section) for section in page.advanced_sections)
+    return f"""
+    <div class="page-stack">
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
+        <h2>{escape(page.title)}</h2>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {render_surface_action_row(page.workflow_actions, scenario_id)}
+        <div class="metric-grid">{summary_metrics}</div>
+        {render_page_state(page.state)}
+      </section>
+      {render_callouts(page.callouts)}
+      <section class="panel-grid">
+        {render_operate_panel(page.session_panel, scenario_id)}
+        {render_operate_panel(page.run_panel, scenario_id)}
+      </section>
+      {render_operate_panel(page.laser_panel, scenario_id)}
+      <section class="panel-grid">
+        {render_operate_panel(page.ndyag_panel, scenario_id)}
+        {render_operate_panel(page.acquisition_panel, scenario_id)}
+      </section>
+      <section class="panel">
+        <h3>Readiness and Defaults</h3>
+        <p class="panel-subtitle">Compact review of recipe identity, calibration context, and current validation status.</p>
+        <div class="panel-grid">{readiness}</div>
+      </section>
+      <section class="panel">
+        <h3>Hardware Readiness</h3>
+        <p class="panel-subtitle">Subsystem posture stays visible before the run starts, without turning Setup into a device-console wall.</p>
+        {hardware}
+      </section>
+      {advanced}
+    </div>"""
+
+
+def render_run_page(page: RunPageModel, scenario_id: str) -> str:
+    summary_metrics = "".join(render_status_item(item) for item in page.summary_metrics)
+    metadata = "".join(render_summary_panel(panel) for panel in page.metadata_panels)
+    hardware = render_device_grid(page.hardware_cards)
+    live_data = "".join(render_trace_preview(preview) for preview in page.live_data_previews) or (
+        '<div class="placeholder-copy">No live-trace previews are available yet for the current run context.</div>'
+    )
+    events = render_event_log(page.event_log)
+    tables = "".join(render_table_section(table) for table in page.tables)
+    post_run_actions = render_surface_action_row(page.post_run_actions, scenario_id)
+    return f"""
+    <div class="page-stack">
+      <section class="hero">
+        <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
+        <h2>{escape(page.title)}</h2>
+        <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {render_surface_action_row(page.workflow_actions, scenario_id)}
+        <div class="metric-grid">{summary_metrics}</div>
+        {render_page_state(page.state)}
+      </section>
+      {render_callouts(page.callouts)}
+      {render_operate_panel(page.run_panel, scenario_id)}
+      <section class="panel">
+        <h3>Run Metadata</h3>
+        <p class="panel-subtitle">Session identity, timing context, acquisition posture, and handoff expectations for the current run.</p>
+        <div class="panel-grid">{metadata}</div>
+        {post_run_actions}
+      </section>
+      <section class="panel-grid">
+        <div class="panel">
+          <h3>Hardware Health</h3>
+          <p class="panel-subtitle">Subsystem posture during or after the current run.</p>
+          {hardware}
+        </div>
+        <div class="panel">
+          <h3>Run Timeline</h3>
+          <p class="panel-subtitle">Events emitted by the authoritative run timeline.</p>
+          {events}
+        </div>
+      </section>
+      <section class="panel">
+        <h3>Live Data Review</h3>
+        <p class="panel-subtitle">Meaningful live-state presentation from authoritative timeline samples, even when full plotting is not available.</p>
+        <div class="trace-grid">{live_data}</div>
+      </section>
+      {tables}
     </div>"""
 
 
@@ -1114,6 +1251,18 @@ def render_status_item(item: StatusItemModel) -> str:
         f'<div><span class="status-label {escape(item.tone)}">{escape(item.value)}</span></div>'
         f"{detail}</div>"
     )
+
+
+def render_device_grid(cards: tuple[DeviceSummaryCard, ...]) -> str:
+    if not cards:
+        return '<div class="placeholder-copy">No device summaries are available.</div>'
+    return '<div class="device-grid">' + "".join(render_device_card(card) for card in cards) + "</div>"
+
+
+def render_event_log(items: tuple[EventLogItem, ...]) -> str:
+    if not items:
+        return '<div class="placeholder-copy">No authoritative events are available for this context yet.</div>'
+    return "".join(render_event_row(item) for item in items)
 
 
 def render_form_field(field: FormFieldModel) -> str:
@@ -1333,10 +1482,10 @@ def render_results_selected_context(page: ResultsPageModel, scenario_id: str) ->
         {failure}
       </div>
       <div class="results-action-bar">
-        <form method="post" action="/experiment/session/open">
+        <form method="post" action="/results/reopen">
           <input type="hidden" name="scenario" value="{escape(scenario_id)}">
           <input type="hidden" name="recent_session_id" value="{escape(card.session_id)}">
-          <button type="submit" class="secondary">Reopen in Experiment</button>
+          <button type="submit" class="secondary">Reopen in Setup</button>
         </form>
         {actions}
       </div>
@@ -1344,7 +1493,7 @@ def render_results_selected_context(page: ResultsPageModel, scenario_id: str) ->
     </div>"""
 
 
-def render_results_trace_preview(preview: ResultsTracePreviewModel) -> str:
+def render_trace_preview(preview: TracePreviewModel) -> str:
     chart = (
         f'<div class="trace-chart"><svg viewBox="0 0 320 132" preserveAspectRatio="none"><polyline points="{escape(preview.polyline_points or "")}"></polyline></svg></div>'
         if preview.polyline_points
@@ -1368,6 +1517,10 @@ def render_results_trace_preview(preview: ResultsTracePreviewModel) -> str:
       </div>
       {notes_markup}
     </div>"""
+
+
+def render_results_trace_preview(preview: ResultsTracePreviewModel) -> str:
+    return render_trace_preview(preview)
 
 
 def render_results_artifact_registry(rows: tuple[ResultsArtifactRowModel, ...], scenario_id: str) -> str:
@@ -1475,11 +1628,11 @@ def render_analyze_page(page: AnalyzePageModel, scenario_id: str) -> str:
     </div>"""
 
 
-def render_service_page(page: ServicePageModel) -> str:
-    cards = "".join(render_device_card(card) for card in page.device_cards) or (
-        '<div class="placeholder-copy">No device summaries are available.</div>'
-    )
+def render_service_page(page: ServicePageModel, scenario_id: str) -> str:
+    cards = render_device_grid(page.device_cards)
     diagnostics = "".join(render_summary_panel(panel) for panel in page.diagnostic_panels)
+    calibration = "".join(render_summary_panel(panel) for panel in page.calibration_panels)
+    recovery = "".join(render_summary_panel(panel) for panel in page.recovery_panels)
     tables = "".join(render_table_section(table) for table in page.tables)
     return f"""
     <div class="page-stack">
@@ -1487,6 +1640,7 @@ def render_service_page(page: ServicePageModel) -> str:
         <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
         <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {render_surface_action_row(page.toolbar_actions, scenario_id)}
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
@@ -1500,6 +1654,19 @@ def render_service_page(page: ServicePageModel) -> str:
           <h3>Service Context</h3>
           <p class="panel-subtitle">What this surface owns and what stays out of the default operator path.</p>
           {diagnostics or '<div class="placeholder-copy">No service diagnostics are available.</div>'}
+        </div>
+      </section>
+      <section class="panel-grid">
+        <div class="panel">
+          <h3>Calibration Visibility</h3>
+          <p class="panel-subtitle">Guarded calibration and mapping defaults stay visible for experts.</p>
+          <div class="panel-grid">{calibration}</div>
+        </div>
+        <div class="panel">
+          <h3>Recovery and Maintenance</h3>
+          <p class="panel-subtitle">Recognized recovery work remains explicit, with disabled controls when the runtime boundary is not yet available.</p>
+          {render_surface_action_row(page.maintenance_actions, scenario_id)}
+          <div class="panel-grid">{recovery}</div>
         </div>
       </section>
       {tables}

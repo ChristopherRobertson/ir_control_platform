@@ -165,7 +165,7 @@ class SurfaceActionModel:
 
 
 @dataclass(frozen=True)
-class ResultsTracePreviewModel:
+class TracePreviewModel:
     title: str
     subtitle: str
     sample_count_label: str
@@ -177,6 +177,9 @@ class ResultsTracePreviewModel:
     polyline_points: str | None = None
     note_lines: tuple[str, ...] = ()
     state: PageStateModel | None = None
+
+
+ResultsTracePreviewModel = TracePreviewModel
 
 
 @dataclass(frozen=True)
@@ -220,13 +223,60 @@ class OperateDisclosureModel:
 
 @dataclass(frozen=True)
 class OperatePageModel:
+    title: str
+    subtitle: str
     state: PageStateModel | None
+    surface_badges: tuple[StatusBadge, ...]
     session_panel: OperatePanelModel
     laser_panel: OperatePanelModel
     ndyag_panel: OperatePanelModel
     acquisition_panel: OperatePanelModel
     run_panel: OperatePanelModel
+    summary_metrics: tuple[StatusItemModel, ...] = ()
+    workflow_actions: tuple[SurfaceActionModel, ...] = ()
+    callouts: tuple[CalloutModel, ...] = ()
+    configuration_panels: tuple[SummaryPanel, ...] = ()
+    hardware_cards: tuple[DeviceSummaryCard, ...] = ()
+    live_data_previews: tuple[TracePreviewModel, ...] = ()
+    event_log: tuple[EventLogItem, ...] = ()
     results_handoff: SurfaceActionModel | None = None
+
+
+@dataclass(frozen=True)
+class SetupPageModel:
+    title: str
+    subtitle: str
+    state: PageStateModel | None
+    surface_badges: tuple[StatusBadge, ...]
+    summary_metrics: tuple[StatusItemModel, ...]
+    workflow_actions: tuple[SurfaceActionModel, ...]
+    callouts: tuple[CalloutModel, ...]
+    session_panel: OperatePanelModel
+    laser_panel: OperatePanelModel
+    ndyag_panel: OperatePanelModel
+    acquisition_panel: OperatePanelModel
+    run_panel: OperatePanelModel
+    readiness_panels: tuple[SummaryPanel, ...] = ()
+    hardware_cards: tuple[DeviceSummaryCard, ...] = ()
+    advanced_sections: tuple["AdvancedSectionModel", ...] = ()
+
+
+@dataclass(frozen=True)
+class RunPageModel:
+    title: str
+    subtitle: str
+    state: PageStateModel | None
+    surface_badges: tuple[StatusBadge, ...]
+    summary_metrics: tuple[StatusItemModel, ...]
+    workflow_actions: tuple[SurfaceActionModel, ...]
+    callouts: tuple[CalloutModel, ...]
+    run_panel: OperatePanelModel
+    metadata_panels: tuple[SummaryPanel, ...]
+    hardware_cards: tuple[DeviceSummaryCard, ...]
+    live_data_previews: tuple[TracePreviewModel, ...]
+    event_log: tuple[EventLogItem, ...]
+    tables: tuple[TableModel, ...] = ()
+    post_run_actions: tuple[SurfaceActionModel, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -263,7 +313,7 @@ class ResultsPageModel:
     artifact_panels: tuple[SummaryPanel, ...] = ()
     artifact_rows: tuple[ResultsArtifactRowModel, ...] = ()
     visualization_panels: tuple[SummaryPanel, ...] = ()
-    trace_previews: tuple[ResultsTracePreviewModel, ...] = ()
+    trace_previews: tuple[TracePreviewModel, ...] = ()
     storage_panels: tuple[SummaryPanel, ...] = ()
     export_panels: tuple[SummaryPanel, ...] = ()
     toolbar_actions: tuple[SurfaceActionModel, ...] = ()
@@ -295,6 +345,10 @@ class ServicePageModel:
     state: PageStateModel | None
     surface_badges: tuple[StatusBadge, ...]
     device_cards: tuple[DeviceSummaryCard, ...]
+    toolbar_actions: tuple[SurfaceActionModel, ...] = ()
+    maintenance_actions: tuple[SurfaceActionModel, ...] = ()
     diagnostic_panels: tuple[SummaryPanel, ...] = ()
+    calibration_panels: tuple[SummaryPanel, ...] = ()
+    recovery_panels: tuple[SummaryPanel, ...] = ()
     callouts: tuple[CalloutModel, ...] = ()
     tables: tuple[TableModel, ...] = ()

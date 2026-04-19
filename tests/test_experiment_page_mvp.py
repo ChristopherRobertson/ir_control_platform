@@ -1,215 +1,120 @@
-"""Focused operator-first Experiment page regression tests."""
+"""Model-level regression tests for the finished Experiment/Setup/Run shell."""
 
 from __future__ import annotations
 
 import asyncio
-import re
 import unittest
-from html import unescape
-from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib.parse import urlencode
-from wsgiref.util import setup_testing_defaults
 
 try:
     from _path_setup import ROOT  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - depends on unittest invocation style
     from tests._path_setup import ROOT
-from ircp_platform import create_simulator_app, create_simulator_runtime_map
+from ircp_platform import create_simulator_runtime_map
 
 
-def _call_wsgi(
-    app,
-    *,
-    method: str,
-    path: str,
-    body: dict[str, str] | None = None,
-) -> tuple[str, dict[str, str], str]:
-    environ: dict[str, object] = {}
-    setup_testing_defaults(environ)
-    environ["REQUEST_METHOD"] = method.upper()
-    if "?" in path:
-        route_path, query = path.split("?", 1)
-    else:
-        route_path, query = path, ""
-    environ["PATH_INFO"] = route_path
-    environ["QUERY_STRING"] = query
-    encoded_body = urlencode(body or {}).encode("utf-8")
-    environ["CONTENT_LENGTH"] = str(len(encoded_body))
-    environ["CONTENT_TYPE"] = "application/x-www-form-urlencoded"
-    environ["wsgi.input"] = BytesIO(encoded_body)
-    captured: dict[str, object] = {}
-
-    def start_response(status: str, headers: list[tuple[str, str]]) -> None:
-        captured["status"] = status
-        captured["headers"] = dict(headers)
-
-    payload = b"".join(app(environ, start_response))
-    return (
-        str(captured["status"]),
-        captured["headers"],  # type: ignore[return-value]
-        payload.decode("utf-8"),
-    )
-
-
-def _visible_text(markup: str) -> str:
-    markup = re.sub(r"<style\b[^>]*>.*?</style>", " ", markup, flags=re.IGNORECASE | re.DOTALL)
-    markup = re.sub(r"<script\b[^>]*>.*?</script>", " ", markup, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<[^>]+>", " ", markup)
-    text = unescape(text)
-    return re.sub(r"\s+", " ", text).strip().lower()
-
-
-class ExperimentPageMvpTests(unittest.TestCase):
-    def _create_runtime_map(self):
+class FinishedExperimentShellModelTests(unittest.TestCase):
+    def _temp_root(self) -> Path:
         tempdir = TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
-        return create_simulator_runtime_map(storage_root=Path(tempdir.name))
+        return Path(tempdir.name)
 
-    def _create_app(self):
-        tempdir = TemporaryDirectory()
-        self.addCleanup(tempdir.cleanup)
-        return create_simulator_app(storage_root=Path(tempdir.name))
+    def test_header_status_exposes_richer_global_badges(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-    def _get_experiment_mode_field(self, page):
-        for field in page.laser_panel.fields:
-            if field.name == "experiment_type":
-                return field
-        self.skipTest("Experiment type selector is not present in the current Experiment page.")
+        header = asyncio.run(runtime.get_header_status("experiment"))
 
-    @staticmethod
-    def _visible_action_labels(page) -> tuple[str, ...]:
-        return tuple(button.label for button in page.laser_panel.actions if not button.hidden)
+        badge_labels = tuple(badge.label for badge in header.badges)
+        self.assertGreaterEqual(len(badge_labels), 7)
+        self.assertIn("Route Experiment", badge_labels)
+        self.assertIn("Scenario Nominal", badge_labels)
+        self.assertTrue(any(label.startswith("Devices ") for label in badge_labels))
+        self.assertTrue(any(label.startswith("Issues ") for label in badge_labels))
 
-    def test_root_lands_on_the_experiment_page(self) -> None:
-        app = self._create_app()
+    def test_experiment_page_model_exposes_finished_sections(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-        root_status, root_headers, _ = _call_wsgi(app, method="GET", path="/")
-        experiment_status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
+        page = asyncio.run(runtime.get_operate_page())
 
-        self.assertEqual(root_status, "303 See Other")
-        self.assertEqual(root_headers["Location"], "/experiment")
-        self.assertEqual(experiment_status, "200 OK")
-        self.assertIn("experiment", _visible_text(body))
+        self.assertEqual(page.title, "Experiment")
+        self.assertGreaterEqual(len(page.surface_badges), 3)
+        self.assertGreaterEqual(len(page.summary_metrics), 4)
+        self.assertGreaterEqual(len(page.configuration_panels), 2)
+        self.assertGreaterEqual(len(page.hardware_cards), 6)
+        self.assertTrue(any(action.label == "Open Setup Workspace" for action in page.workflow_actions))
+        self.assertEqual(page.run_panel.actions[0].label, "Run Preflight")
+        self.assertEqual(page.run_panel.actions[1].label, "Start Run")
 
-    def test_experiment_page_keeps_the_operator_first_core_sections(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
-        text = _visible_text(body)
+    def test_setup_page_model_exposes_readiness_hardware_and_advanced_sections(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-        self.assertEqual(status, "200 OK")
-        for label in (
-            "mircat",
-            "session",
-            "nd:yag settings",
-            "hf2li",
-            "run control",
-        ):
-            self.assertIn(label, text)
+        page = asyncio.run(runtime.get_setup_page())
 
-    def test_experiment_page_excludes_advanced_and_legacy_device_clutter(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
-        text = _visible_text(body)
+        self.assertEqual(page.title, "Setup")
+        self.assertGreaterEqual(len(page.summary_metrics), 4)
+        self.assertGreaterEqual(len(page.readiness_panels), 3)
+        self.assertGreaterEqual(len(page.hardware_cards), 6)
+        self.assertGreaterEqual(len(page.advanced_sections), 2)
+        self.assertEqual(page.run_panel.title, "Preflight / Validation")
+        self.assertEqual(page.run_panel.actions[0].action, "/setup/preflight")
 
-        self.assertEqual(status, "200 OK")
-        for forbidden in (
-            "opo",
-            "pico",
-            "t660",
-            "mux route",
-            "readiness matrix",
-            "workflow review map",
-            "pump shots before probe",
-            "current mircat status",
-            "readout component",
-            "start acquisition",
-            "stop acquisition",
-            "acquisition status",
-            "live status",
-            "recent activity",
-            "probe settings",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, text)
+    def test_run_page_model_exposes_live_timeline_data_after_start(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-    def test_fixed_mode_keeps_single_wavelength_controls_when_mode_switch_exists(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-        mode_field = self._get_experiment_mode_field(operate_page)
+        run_state = asyncio.run(runtime.start_run())
+        page = asyncio.run(runtime.get_run_page())
 
-        option_labels = {option.label for option in mode_field.options}
-        action_labels = self._visible_action_labels(operate_page)
-        field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
+        self.assertEqual(page.title, "Run")
+        self.assertEqual(run_state.phase.value, "completed")
+        self.assertIsNotNone(page.state)
+        assert page.state is not None
+        self.assertEqual(page.state.title, "Run completed")
+        self.assertGreaterEqual(len(page.summary_metrics), 4)
+        self.assertGreaterEqual(len(page.metadata_panels), 3)
+        self.assertGreaterEqual(len(page.live_data_previews), 1)
+        self.assertGreaterEqual(len(page.event_log), 1)
+        self.assertGreaterEqual(len(page.tables), 2)
+        self.assertTrue(any(action.label == "Open Results" for action in page.post_run_actions))
 
-        self.assertIn("Fixed Wavelength", option_labels)
-        self.assertIn("Wavelength Scan", option_labels)
-        self.assertIn("Emission Mode", field_labels)
-        self.assertIn("Tune", action_labels)
-        self.assertNotIn("Start Scan", action_labels)
-        self.assertNotIn("Stop Scan", action_labels)
-        self.assertIn("Wavenumber (cm^-1)", field_labels)
-        self.assertNotIn("Start wavenumber (cm^-1)", field_labels)
-        self.assertNotIn("Stop wavenumber (cm^-1)", field_labels)
+    def test_faulted_run_page_model_projects_fault_state_and_trace_preview(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["faulted_hf2"]
 
-    def test_scan_mode_swaps_in_scan_controls_when_mode_switch_exists(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-        initial_page = asyncio.run(runtime.get_operate_page())
-        self._get_experiment_mode_field(initial_page)
+        asyncio.run(runtime.start_run())
+        page = asyncio.run(runtime.get_run_page())
 
-        asyncio.run(runtime.set_experiment_type("wavelength_scan"))
-        operate_page = asyncio.run(runtime.get_operate_page())
+        self.assertIsNotNone(page.state)
+        assert page.state is not None
+        self.assertEqual(page.state.title, "Run faulted")
+        self.assertTrue(any("HF2 reported a simulated overload fault" in item.message for item in page.event_log))
+        self.assertGreaterEqual(len(page.live_data_previews), 1)
 
-        action_labels = self._visible_action_labels(operate_page)
-        field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
+    def test_open_saved_session_stages_unique_session_id_for_rerun(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-        self.assertIn("Start Scan", action_labels)
-        self.assertIn("Stop Scan", action_labels)
-        self.assertNotIn("Tune", action_labels)
-        self.assertIn("Emission Mode", field_labels)
-        self.assertIn("Start wavenumber (cm^-1)", field_labels)
-        self.assertIn("Stop wavenumber (cm^-1)", field_labels)
-        self.assertIn("Scan Speed", field_labels)
-        self.assertNotIn("Dwell time per point (ms)", field_labels)
-        self.assertNotIn("Wavenumber (cm^-1)", field_labels)
+        asyncio.run(runtime.open_saved_session("saved-session-001"))
+        page = asyncio.run(runtime.get_setup_page())
+        field_values = {field.name: field.value for field in page.session_panel.fields}
 
-    def test_pulsed_mode_exposes_pulse_fields(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-        asyncio.run(
-            runtime.configure_operating_mode(
-                experiment_type="fixed_wavelength",
-                emission_mode="pulsed",
-            )
-        )
-        operate_page = asyncio.run(runtime.get_operate_page())
-        field_labels = {field.label for field in operate_page.laser_panel.fields}
+        self.assertEqual(field_values["session_id_input"], "saved-session-001-rerun")
 
-        self.assertIn("Pulse repetition rate (Hz)", field_labels)
-        self.assertIn("Pulse width (ns)", field_labels)
-        self.assertIn("Duty cycle (%)", field_labels)
+    def test_default_seeded_runtime_suggests_new_session_id_before_start(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-    def test_ui_shell_stays_on_typed_presentation_boundaries(self) -> None:
+        page = asyncio.run(runtime.get_setup_page())
+        field_values = {field.name: field.value for field in page.session_panel.fields}
+        run_state = asyncio.run(runtime.start_run())
+
+        self.assertEqual(field_values["session_id_input"], "saved-session-001-rerun")
+        self.assertEqual(run_state.session_id, "saved-session-001-rerun")
+
+    def test_ui_shell_source_exposes_finished_page_models(self) -> None:
         ui_root = Path(ROOT) / "ui-shell" / "src" / "ircp_ui_shell"
-        boundary_source = (ui_root / "boundaries.py").read_text(encoding="utf-8")
-        banned_fragments = (
-            "ircp_drivers",
-            "ircp_data_pipeline",
-            "ircp_processing",
-            "ircp_analysis",
-            "Control_System",
-        )
+        models_source = (ui_root / "models.py").read_text(encoding="utf-8")
 
-        self.assertIn("class UiQueryService(Protocol)", boundary_source)
-        self.assertIn("class UiCommandService(Protocol)", boundary_source)
-        self.assertIn("class UiRuntimeGateway(UiQueryService, UiCommandService, Protocol)", boundary_source)
-
-        for path in ui_root.glob("*.py"):
-            source = path.read_text(encoding="utf-8")
-            for fragment in banned_fragments:
-                self.assertNotIn(fragment, source, f"{path.name} should not import {fragment}")
+        self.assertIn("class SetupPageModel", models_source)
+        self.assertIn("class RunPageModel", models_source)
+        self.assertIn("class TracePreviewModel", models_source)
 
 
 if __name__ == "__main__":

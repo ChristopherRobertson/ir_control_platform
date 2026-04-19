@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-check the baseline Experiment page through the local UI runner."""
+"""Smoke-check the finished simulator-backed UI shell through the local runner."""
 
 from __future__ import annotations
 
@@ -19,42 +19,44 @@ RUNNER = REPO_ROOT / "run_ui.py"
 HOST = "127.0.0.1"
 STARTUP_TIMEOUT_SECONDS = 12.0
 
-VISIBLE_MARKERS = (
+EXPERIMENT_MARKERS = (
     "Experiment",
-    "Fixed Wavelength",
-    "Session",
-    "Operating Mode",
-    "Nd:YAG Settings",
-    "HF2LI",
-    "Run Control",
-    "Save Session",
-    "Run Preflight",
-    "Start Experiment",
+    "Current Configuration",
+    "Hardware Visibility",
+    "Live Data",
+    "Open Setup Workspace",
+    "Open Run Workspace",
 )
 
-HIDDEN_MARKERS = (
-    "Pump Shots Before Probe",
-    "Pico Secondary Capture",
-    "Pico Monitoring Mode",
-    "MUX Route Set",
-    "T660-2",
-    "T660-1",
-    "Timing Program",
-    "Trigger Marker",
+SETUP_MARKERS = (
+    "Setup",
+    "Preflight / Validation",
+    "Readiness and Defaults",
+    "Hardware Readiness",
+    "Timing and synchronization detail",
 )
 
-FIXED_MODE_MARKERS = (
-    'name="tune_target_cm1"',
-    ">Tune<",
+RUN_MARKERS = (
+    "Run completed",
+    "Run Metadata",
+    "Run Timeline",
+    "Live Data Review",
+    "Open Results",
 )
 
-SCAN_MODE_MARKERS = (
-    'name="scan_start_cm1"',
-    'name="scan_stop_cm1"',
-    'name="scan_step_size_cm1"',
-    'name="scan_dwell_time_ms"',
-    ">Start Scan<",
-    ">Stop Scan<",
+RESULTS_MARKERS = (
+    "Recent Sessions",
+    "Visualization and Trace Review",
+    "Artifacts and Provenance",
+    "Download Manifest",
+    "Compare to Baseline",
+)
+
+SERVICE_MARKERS = (
+    "Device Diagnostics",
+    "Calibration Visibility",
+    "Recovery and Maintenance",
+    "Attempt Recovery",
 )
 
 
@@ -109,18 +111,8 @@ def _require_contains(body: str, markers: tuple[str, ...], context: str) -> None
         raise AssertionError(f"{context} missing markers: {', '.join(missing)}")
 
 
-def _require_absent(body: str, markers: tuple[str, ...], context: str) -> None:
-    present = [marker for marker in markers if marker in body]
-    if present:
-        raise AssertionError(f"{context} unexpectedly included: {', '.join(present)}")
-
-
 def _print_ok(message: str) -> None:
     print(f"PASS {message}")
-
-
-def _print_skip(message: str) -> None:
-    print(f"SKIP {message}")
 
 
 def _run_smoke_check(host: str, port: int) -> None:
@@ -141,58 +133,46 @@ def _run_smoke_check(host: str, port: int) -> None:
                 raise AssertionError(f"Expected / to redirect to /experiment, got {root_status} {root_headers!r}")
             _print_ok("default route redirects to /experiment")
 
-            experiment_status, _experiment_headers, experiment_body = _request(host, port, "GET", "/experiment")
+            experiment_status, _headers, experiment_body = _request(host, port, "GET", "/experiment")
             if experiment_status != 200:
                 raise AssertionError(f"Expected /experiment to return 200, got {experiment_status}")
-            _print_ok("Experiment page loads")
+            _require_contains(experiment_body, EXPERIMENT_MARKERS, "Experiment route")
+            _print_ok("Experiment mission-control markers are visible")
 
-            _require_contains(experiment_body, VISIBLE_MARKERS, "baseline Experiment page")
-            _print_ok("baseline sections and scope markers are visible")
+            setup_status, _headers, setup_body = _request(host, port, "GET", "/setup")
+            if setup_status != 200:
+                raise AssertionError(f"Expected /setup to return 200, got {setup_status}")
+            _require_contains(setup_body, SETUP_MARKERS, "Setup route")
+            _print_ok("Setup workspace markers are visible")
 
-            _require_absent(experiment_body, HIDDEN_MARKERS, "baseline Experiment page")
-            _print_ok("timing, Pico, and MUX clutter stay off the main page")
-
-            _require_contains(experiment_body, FIXED_MODE_MARKERS, "fixed-wavelength mode")
-            _require_absent(experiment_body, ('name="scan_start_cm1"',), "fixed-wavelength mode")
-            _print_ok("default mode stays on fixed-wavelength MIRcat controls")
-
-            mode_switch_present = (
-                'action="/experiment/laser/configure"' in experiment_body
-                and 'name="experiment_type"' in experiment_body
-                and "Fixed Wavelength" in experiment_body
-                and "Wavelength Scan" in experiment_body
-            )
-            if not mode_switch_present:
-                _print_skip("experiment-type switch is not rendered")
-                return
-
-            switch_status, switch_headers, _switch_body = _request(
+            start_status, start_headers, _body = _request(
                 host,
                 port,
                 "POST",
-                "/experiment/laser/configure",
-                body={
-                    "scenario": "nominal",
-                    "experiment_type": "wavelength_scan",
-                    "emission_mode": "cw",
-                    "scan_start_cm1": "1845",
-                    "scan_stop_cm1": "1855",
-                    "scan_step_size_cm1": "1",
-                    "scan_dwell_time_ms": "250",
-                },
+                "/run/start",
+                body={"scenario": "nominal"},
             )
-            if switch_status != 303 or switch_headers.get("Location") != "/experiment":
-                raise AssertionError(
-                    f"Expected wavelength-scan POST to redirect to /experiment, got {switch_status} {switch_headers!r}"
-                )
+            if start_status != 303 or start_headers.get("Location") != "/run":
+                raise AssertionError(f"Expected /run/start to redirect to /run, got {start_status} {start_headers!r}")
+            _print_ok("Run start action redirects to the Run workspace")
 
-            scan_status, _scan_headers, scan_body = _request(host, port, "GET", "/experiment")
-            if scan_status != 200:
-                raise AssertionError(f"Expected scan-mode /experiment to return 200, got {scan_status}")
+            run_status, _headers, run_body = _request(host, port, "GET", "/run")
+            if run_status != 200:
+                raise AssertionError(f"Expected /run to return 200, got {run_status}")
+            _require_contains(run_body, RUN_MARKERS, "Run route")
+            _print_ok("Run workspace markers are visible after start")
 
-            _require_contains(scan_body, SCAN_MODE_MARKERS, "wavelength-scan mode")
-            _require_absent(scan_body, ('name="tune_target_cm1"', ">Tune<"), "wavelength-scan mode")
-            _print_ok("mode switch swaps fixed controls for scan controls")
+            results_status, _headers, results_body = _request(host, port, "GET", "/results")
+            if results_status != 200:
+                raise AssertionError(f"Expected /results to return 200, got {results_status}")
+            _require_contains(results_body, RESULTS_MARKERS, "Results route")
+            _print_ok("Results workspace markers are visible")
+
+            service_status, _headers, service_body = _request(host, port, "GET", "/service")
+            if service_status != 200:
+                raise AssertionError(f"Expected /service to return 200, got {service_status}")
+            _require_contains(service_body, SERVICE_MARKERS, "Service route")
+            _print_ok("Service workspace markers are visible")
         finally:
             process.terminate()
             try:
@@ -203,7 +183,7 @@ def _run_smoke_check(host: str, port: int) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Smoke-check the minimal Experiment page through the local UI runner.")
+    parser = argparse.ArgumentParser(description="Smoke-check the finished UI shell through the local runner.")
     parser.add_argument("--host", default=HOST, help="Bind address used for the temporary local runner.")
     parser.add_argument("--port", type=int, default=0, help="Port used for the temporary local runner. Defaults to an open port.")
     args = parser.parse_args()
@@ -215,7 +195,7 @@ def main() -> int:
         print(f"FAIL {exc}", file=sys.stderr)
         return 1
 
-    print("PASS Experiment page smoke check complete")
+    print("PASS Finished UI shell smoke check complete")
     return 0
 
 

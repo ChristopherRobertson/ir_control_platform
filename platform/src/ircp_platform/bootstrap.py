@@ -59,7 +59,16 @@ def create_simulator_runtime_map(storage_root: Path | None = None) -> dict[str, 
 
 
 def create_simulator_app(storage_root: Path | None = None) -> IRCPUiApp:
-    return create_ui_app(create_simulator_runtime_map(storage_root=storage_root), default_scenario="nominal")
+    catalog = SupportedV1SimulatorCatalog()
+    scenario_catalog = {
+        context.scenario_id: (context.label, context.description)
+        for context in catalog.list_contexts()
+    }
+    return create_ui_app(
+        create_simulator_runtime_map(storage_root=storage_root),
+        default_scenario="nominal",
+        scenario_catalog=scenario_catalog,
+    )
 
 
 def run_simulator_demo(host: str = "127.0.0.1", port: int = 8000) -> None:

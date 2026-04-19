@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ircp_contracts import DeviceStatus, PreflightReport, RunPhase, RunState, SessionStatus
 from ircp_data_pipeline import SessionDetail, SessionSummary
+from ircp_experiment_engine import LiveDataPoint, RunTimeline
 from ircp_simulators import SimulatorScenarioContext
 from ircp_ui_shell import (
     ActionButtonModel,
@@ -26,15 +27,25 @@ from ircp_ui_shell import (
     ResultsFilterModel,
     ResultsPageModel,
     ResultsTracePreviewModel,
+    RunPageModel,
     ServicePageModel,
     SessionSummaryCard,
+    SetupPageModel,
     StatusBadge,
     StatusItemModel,
     SummaryPanel,
     SurfaceActionModel,
     TableModel,
+    TracePreviewModel,
 )
-from ircp_ui_shell.page_state import blocked_state, empty_state, fault_state, unavailable_state, warning_state
+from ircp_ui_shell.page_state import (
+    blocked_state,
+    empty_state,
+    fault_state,
+    success_state,
+    unavailable_state,
+    warning_state,
+)
 
 from .operator_state import (
     FIXED_WAVELENGTH_EXPERIMENT_TYPE,
@@ -62,47 +73,178 @@ from .runtime_helpers import artifact_summary_line, bool_vendor_status, event_to
 def build_header_status(
     *,
     active_route: str,
+    scenario: SimulatorScenarioContext,
     draft: OperatorDraftState,
+    preflight: PreflightReport,
+    device_statuses: tuple[DeviceStatus, ...],
     current_session_id: str,
     run_phase_label: str,
     ready_to_start: bool,
 ) -> HeaderStatus:
+    route_titles = {
+        "experiment": "Experiment",
+        "setup": "Setup",
+        "run": "Run",
+        "results": "Results",
+        "analyze": "Analyze",
+        "advanced": "Advanced",
+        "service": "Service",
+    }
+    route_summaries = {
+        "experiment": "Default mission control for the supported operator workflow.",
+        "setup": "Prepare the recipe, hardware, and preflight state before starting.",
+        "run": "Monitor authoritative run state, live data, and post-run handoff.",
+        "results": "Review saved sessions, artifacts, visual outputs, and export readiness.",
+        "analyze": "Inspect persisted-session evaluation inputs without live-device dependencies.",
+        "advanced": "Review expert timing, routing, acquisition, and guarded defaults.",
+        "service": "Inspect diagnostics, calibration custody, and controlled recovery status.",
+    }
+    ready_devices = sum(1 for status in device_statuses if status.ready)
+    connected_devices = sum(1 for status in device_statuses if status.connected)
+    faulted_devices = sum(1 for status in device_statuses if status.reported_faults)
+    blocking_count = len(_operator_preflight_messages(preflight, blocking_only=True))
+    warning_count = len(_operator_preflight_messages(preflight, warning_only=True))
+    device_tone = "good"
+    if faulted_devices:
+        device_tone = "bad"
+    elif ready_devices < len(device_statuses) or connected_devices < len(device_statuses):
+        device_tone = "warn"
     return HeaderStatus(
         title="IR Control Platform",
         active_route=active_route,
         scenario_options=(),
         navigation=(),
         badges=(
+            StatusBadge(label=f"Route {route_titles.get(active_route, active_route.title())}", tone="info"),
+            StatusBadge(
+                label=f"Mode {experiment_type_label(draft.experiment_type)} / {draft.emission_mode.value.upper()}",
+                tone="neutral",
+            ),
+            StatusBadge(label=f"Scenario {scenario.label}", tone="neutral"),
+            StatusBadge(label=f"Devices {ready_devices}/{len(device_statuses)} ready", tone=device_tone),
             StatusBadge(
                 label="Ready to Start" if ready_to_start else "Needs Attention",
                 tone="good" if ready_to_start else "warn",
             ),
+            StatusBadge(
+                label=f"Issues {blocking_count} block / {warning_count} warn",
+                tone="good" if blocking_count == 0 else "bad",
+            ),
             StatusBadge(label=f"Current Session {current_session_id}", tone="neutral"),
             StatusBadge(label=f"Run {run_phase_label}", tone=run_badge_tone(run_phase_label)),
         ),
-        summary="",
+        summary=f"{route_summaries.get(active_route, '')} {scenario.description}".strip(),
     )
 
 
 def build_operate_page(
     *,
     draft: OperatorDraftState,
+    scenario: SimulatorScenarioContext,
     preflight: PreflightReport,
     latest_state: RunState | None,
+    latest_timeline: RunTimeline | None,
     sessions: tuple[SessionSummary, ...],
     laser_status: DeviceStatus,
     hf2_status: DeviceStatus,
+    device_cards: tuple[DeviceSummaryCard, ...],
     draft_session_id: str | None,
     selected_session_id: str | None,
 ) -> OperatePageModel:
+    current_session_id = draft_session_id or selected_session_id
     return OperatePageModel(
+        title="Experiment",
+        subtitle="Operator mission control for the supported workflow. Use Setup and Run as focused views without leaving the canonical experiment path behind.",
         state=_operate_page_state(draft.experiment_type, preflight, latest_state),
+        surface_badges=_surface_badges("experiment", draft),
         session_panel=_build_session_panel(draft, sessions, draft_session_id, selected_session_id),
         laser_panel=_build_laser_panel(draft, laser_status),
         ndyag_panel=_build_ndyag_panel(draft),
         acquisition_panel=_build_acquisition_panel(draft, hf2_status),
         run_panel=_build_run_panel(draft.experiment_type, preflight, latest_state),
+        summary_metrics=_experiment_summary_metrics(
+            draft.experiment_type,
+            preflight,
+            latest_state,
+            current_session_id,
+            latest_timeline,
+        ),
+        workflow_actions=_experiment_workflow_actions(current_session_id, latest_state),
+        callouts=_experiment_callouts(scenario, draft.experiment_type, preflight, latest_state),
+        configuration_panels=_experiment_configuration_panels(draft, scenario, preflight),
+        hardware_cards=device_cards,
+        live_data_previews=_timeline_trace_previews(latest_timeline),
+        event_log=_timeline_event_log(latest_timeline),
         results_handoff=_operate_results_handoff(draft_session_id, latest_state),
+    )
+
+
+def build_setup_page(
+    *,
+    draft: OperatorDraftState,
+    scenario: SimulatorScenarioContext,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+    sessions: tuple[SessionSummary, ...],
+    laser_status: DeviceStatus,
+    hf2_status: DeviceStatus,
+    device_cards: tuple[DeviceSummaryCard, ...],
+    draft_session_id: str | None,
+    selected_session_id: str | None,
+) -> SetupPageModel:
+    current_session_id = draft_session_id or selected_session_id
+    return SetupPageModel(
+        title="Setup",
+        subtitle="Prepare the recipe, confirm readiness, and surface blocking issues before entering the focused Run workspace.",
+        state=_setup_page_state(draft.experiment_type, preflight, latest_state),
+        surface_badges=_surface_badges("setup", draft),
+        summary_metrics=_setup_summary_metrics(draft.experiment_type, preflight, current_session_id, device_cards),
+        workflow_actions=_setup_workflow_actions(current_session_id, preflight),
+        callouts=_setup_callouts(scenario, draft.experiment_type, preflight),
+        session_panel=_build_session_panel(draft, sessions, draft_session_id, selected_session_id),
+        laser_panel=_build_laser_panel(draft, laser_status),
+        ndyag_panel=_build_ndyag_panel(draft),
+        acquisition_panel=_build_acquisition_panel(draft, hf2_status),
+        run_panel=_build_setup_validation_panel(draft.experiment_type, preflight, latest_state),
+        readiness_panels=_setup_readiness_panels(draft, scenario, preflight, current_session_id),
+        hardware_cards=device_cards,
+        advanced_sections=_setup_advanced_sections(scenario, preflight),
+    )
+
+
+def build_run_page(
+    *,
+    draft: OperatorDraftState,
+    scenario: SimulatorScenarioContext,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+    latest_timeline: RunTimeline | None,
+    device_cards: tuple[DeviceSummaryCard, ...],
+    draft_session_id: str | None,
+    selected_session_id: str | None,
+) -> RunPageModel:
+    current_session_id = draft_session_id or (latest_state.session_id if latest_state is not None else selected_session_id)
+    return RunPageModel(
+        title="Run",
+        subtitle="Review authoritative run state, timeline events, live-trace previews, and the handoff into persisted-session results.",
+        state=_run_page_state(draft.experiment_type, preflight, latest_state),
+        surface_badges=_surface_badges("run", draft),
+        summary_metrics=_run_summary_metrics(
+            draft.experiment_type,
+            preflight,
+            latest_state,
+            latest_timeline,
+            current_session_id,
+        ),
+        workflow_actions=_run_workflow_actions(current_session_id),
+        callouts=_run_callouts(scenario, draft.experiment_type, preflight, latest_state, latest_timeline),
+        run_panel=_build_run_panel(draft.experiment_type, preflight, latest_state),
+        metadata_panels=_run_metadata_panels(draft, preflight, latest_state, latest_timeline, current_session_id),
+        hardware_cards=device_cards,
+        live_data_previews=_timeline_trace_previews(latest_timeline),
+        event_log=_timeline_event_log(latest_timeline),
+        tables=_run_tables(latest_timeline),
+        post_run_actions=_run_post_run_actions(current_session_id, latest_state),
     )
 
 
@@ -392,19 +534,20 @@ def build_analyze_page(
 def build_service_page(
     *,
     draft: OperatorDraftState,
+    scenario: SimulatorScenarioContext,
     storage_root: Path,
     session_count: int,
     device_cards: tuple[DeviceSummaryCard, ...],
 ) -> ServicePageModel:
+    state = _service_page_state(device_cards)
     return ServicePageModel(
         title="Service",
         subtitle="Bench-owned calibration, diagnostics, timing verification, configuration review, and controlled recovery.",
-        state=unavailable_state(
-            "Service scaffold only",
-            "This pass exposes expert review surfaces and guarded placeholders, not raw vendor consoles.",
-        ),
+        state=state,
         surface_badges=_surface_badges("service", draft),
         device_cards=device_cards,
+        toolbar_actions=_service_toolbar_actions(session_count),
+        maintenance_actions=_service_maintenance_actions(state),
         diagnostic_panels=(
             SummaryPanel(
                 title="Timing Roles",
@@ -432,7 +575,18 @@ def build_service_page(
                     "Configuration snapshots support restart-safe diagnosis before recovery.",
                 ),
             ),
+            SummaryPanel(
+                title="Scenario Context",
+                subtitle="Service review should make the current simulator context explicit.",
+                items=(
+                    f"Scenario: {scenario.label}",
+                    f"Description: {scenario.description}",
+                    "Simulator-backed diagnostics remain the default review path before bench hardening.",
+                ),
+            ),
         ),
+        calibration_panels=_service_calibration_panels(scenario),
+        recovery_panels=_service_recovery_panels(device_cards, session_count),
         callouts=(
             CalloutModel(
                 title="Service stays out of the main path",
@@ -838,13 +992,27 @@ def _build_run_panel(experiment_type: str, preflight: PreflightReport, latest_st
     ready_to_start = _start_experiment_ready(experiment_type, preflight)
     run_label, run_tone = _experiment_state_summary(experiment_type, preflight, latest_state)
     run_state: PageStateModel | None = None
+    blocking_messages = _operator_preflight_messages(preflight, blocking_only=True)
+    abort_disabled = latest_state is None or latest_state.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED}
     if latest_state is not None and latest_state.phase == RunPhase.FAULTED and latest_state.latest_fault is not None:
         run_state = fault_state("Run faulted", latest_state.latest_fault.message)
+    elif latest_state is not None and latest_state.phase == RunPhase.ABORTED:
+        run_state = warning_state(
+            "Run aborted",
+            "The canonical run stopped on an explicit abort path and the partial session remains reviewable.",
+            details=((latest_state.failure_reason.value,) if latest_state.failure_reason is not None else ()),
+        )
+    elif latest_state is not None and latest_state.phase == RunPhase.COMPLETED:
+        run_state = success_state(
+            "Run complete",
+            "The latest run completed successfully and its persisted session is ready for Results review.",
+            details=((f"Session {latest_state.session_id}",) if latest_state.session_id is not None else ()),
+        )
     elif not preflight.ready_to_start:
         run_state = blocked_state(
             "Experiment blocked",
             "Finish the required setup items before starting the experiment.",
-            details=_operator_preflight_messages(preflight),
+            details=blocking_messages,
         )
     elif not _start_experiment_supported(experiment_type):
         run_state = warning_state(
@@ -855,14 +1023,33 @@ def _build_run_panel(experiment_type: str, preflight: PreflightReport, latest_st
     return OperatePanelModel(
         title="Run Control",
         actions=(
-            ActionButtonModel("Run Preflight", "/experiment/run/preflight"),
-            ActionButtonModel("Start Experiment", "/experiment/run/start", disabled=not ready_to_start),
             ActionButtonModel(
-                "Stop / Abort Experiment",
-                "/experiment/run/abort",
+                "Run Preflight",
+                "/setup/preflight",
+                helper_text="Re-evaluate the canonical preflight path before starting.",
+            ),
+            ActionButtonModel(
+                "Start Run",
+                "/run/start",
+                disabled=not ready_to_start,
+                helper_text=(
+                    "Clear the blocking setup items before starting."
+                    if blocking_messages
+                    else "Fixed-wavelength Start Run is the only fully wired run path in this simulator."
+                    if not _start_experiment_supported(experiment_type)
+                    else "Start the canonical run path."
+                ),
+            ),
+            ActionButtonModel(
+                "Abort Run",
+                "/run/abort",
                 tone="danger",
-                disabled=latest_state is None
-                or latest_state.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED},
+                disabled=abort_disabled,
+                helper_text=(
+                    "No active run is currently abortable in this simulator runtime."
+                    if abort_disabled
+                    else "Abort the active canonical run path explicitly."
+                ),
             ),
         ),
         status_items=(
@@ -873,12 +1060,59 @@ def _build_run_panel(experiment_type: str, preflight: PreflightReport, latest_st
             ),
             StatusItemModel("Current run state", run_label, tone=run_tone),
             StatusItemModel(
-                "Error / warning summary",
+                "Blocking or warning summary",
                 _run_issue_summary(experiment_type, preflight),
                 tone="good" if ready_to_start else "warn",
             ),
         ),
         state=run_state,
+    )
+
+
+def _build_setup_validation_panel(
+    experiment_type: str,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+) -> OperatePanelModel:
+    blocking_messages = _operator_preflight_messages(preflight, blocking_only=True)
+    warning_messages = _operator_preflight_messages(preflight, warning_only=True)
+    ready_to_start = _start_experiment_ready(experiment_type, preflight)
+    status_value = "Validated" if ready_to_start else "Attention"
+    if latest_state is not None and latest_state.phase == RunPhase.COMPLETED:
+        status_value = "Validated from last successful run"
+    return OperatePanelModel(
+        title="Preflight / Validation",
+        actions=(
+            ActionButtonModel(
+                "Run Preflight",
+                "/setup/preflight",
+                helper_text="Refresh the canonical readiness evaluation using the current draft recipe and hardware state.",
+            ),
+        ),
+        status_items=(
+            StatusItemModel(
+                "Overall readiness",
+                status_value,
+                tone="good" if ready_to_start else "warn",
+                detail="Run uses the same canonical preflight and orchestration path as Experiment.",
+            ),
+            StatusItemModel(
+                "Blocking checks",
+                str(len(blocking_messages)),
+                tone="good" if not blocking_messages else "bad",
+                detail=blocking_messages[0] if blocking_messages else "No blocking checks remain.",
+            ),
+            StatusItemModel(
+                "Warnings",
+                str(len(warning_messages)),
+                tone="good" if not warning_messages else "warn",
+                detail=warning_messages[0] if warning_messages else "No warning-only issues remain.",
+            ),
+        ),
+        state=_setup_page_state(experiment_type, preflight, latest_state),
+        notes=(
+            "Setup keeps the system honest: validate here, then move into Run for lifecycle monitoring and results handoff.",
+        ),
     )
 
 
@@ -893,6 +1127,18 @@ def _operate_page_state(
             "The last experiment stopped on an explicit device fault.",
             details=(latest_state.latest_fault.message,),
         )
+    if latest_state is not None and latest_state.phase == RunPhase.ABORTED:
+        return warning_state(
+            "Last run aborted",
+            "The last canonical run was aborted and remains available for partial-session review.",
+            details=((latest_state.failure_reason.value,) if latest_state.failure_reason is not None else ()),
+        )
+    if latest_state is not None and latest_state.phase == RunPhase.COMPLETED:
+        return success_state(
+            "Latest run complete",
+            "The latest run completed and its saved session is ready for Results.",
+            details=((f"Session {latest_state.session_id}",) if latest_state.session_id is not None else ()),
+        )
     if preflight.ready_to_start and not _start_experiment_supported(experiment_type):
         return warning_state(
             "Scan mode is partially wired",
@@ -903,6 +1149,8 @@ def _operate_page_state(
         preflight,
         title="Experiment not ready",
         warning_title="Experiment ready with warnings",
+        success_title="Experiment ready",
+        success_message="The current recipe and hardware state passed the required checks for the canonical fixed-wavelength run.",
     )
 
 
@@ -911,6 +1159,9 @@ def _preflight_page_state(
     *,
     title: str,
     warning_title: str,
+    success_title: str | None = None,
+    success_message: str | None = None,
+    success_details: tuple[str, ...] = (),
 ) -> PageStateModel | None:
     blocking_messages = _operator_preflight_messages(preflight, blocking_only=True)
     warning_messages = _operator_preflight_messages(preflight, warning_only=True)
@@ -926,7 +1177,77 @@ def _preflight_page_state(
             "The experiment can proceed, but something still needs attention.",
             details=warning_messages,
         )
+    if success_title is not None:
+        return success_state(
+            success_title,
+            success_message or "The current experiment state passed the required checks.",
+            details=success_details,
+        )
     return None
+
+
+def _setup_page_state(
+    experiment_type: str,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+) -> PageStateModel | None:
+    if latest_state is not None and latest_state.phase == RunPhase.FAULTED and latest_state.latest_fault is not None:
+        return fault_state(
+            "Setup attention required",
+            "The last run fault is still the most urgent operator issue.",
+            details=(latest_state.latest_fault.message,),
+        )
+    if preflight.ready_to_start and not _start_experiment_supported(experiment_type):
+        return warning_state(
+            "Setup validated with limits",
+            "Wavelength scan configuration is reviewable here, but full Start Run support remains fixed-wavelength only.",
+            details=("Use the scan recipe controls for simulator-backed scan review until scan run wiring lands.",),
+        )
+    return _preflight_page_state(
+        preflight,
+        title="Setup blocked",
+        warning_title="Setup ready with warnings",
+        success_title="Setup validated",
+        success_message="The current draft recipe passed preflight and is ready for the focused Run workspace.",
+    )
+
+
+def _run_page_state(
+    experiment_type: str,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+) -> PageStateModel | None:
+    if latest_state is not None and latest_state.phase == RunPhase.FAULTED and latest_state.latest_fault is not None:
+        return fault_state(
+            "Run faulted",
+            "The authoritative run state reports an explicit device fault.",
+            details=(latest_state.latest_fault.message,),
+        )
+    if latest_state is not None and latest_state.phase == RunPhase.ABORTED:
+        return warning_state(
+            "Run aborted",
+            "The run ended on the explicit abort path and the partial session remains reviewable.",
+            details=((latest_state.failure_reason.value,) if latest_state.failure_reason is not None else ()),
+        )
+    if latest_state is not None and latest_state.phase == RunPhase.COMPLETED:
+        return success_state(
+            "Run completed",
+            "The latest run completed and can be handed off to Results for persisted review.",
+            details=((f"Session {latest_state.session_id}",) if latest_state.session_id is not None else ()),
+        )
+    if preflight.ready_to_start and not _start_experiment_supported(experiment_type):
+        return warning_state(
+            "Run surface ready with scan limitations",
+            "The Run workspace is available, but the fixed-wavelength canonical start path remains the only fully wired run action.",
+            details=("Use the MIRcat scan controls for simulator-backed scan review.",),
+        )
+    return _preflight_page_state(
+        preflight,
+        title="Run blocked",
+        warning_title="Run ready with warnings",
+        success_title="Run ready",
+        success_message="The canonical run path is validated and ready to start.",
+    )
 
 
 def _start_experiment_supported(experiment_type: str) -> bool:
@@ -942,8 +1263,8 @@ def _run_issue_summary(experiment_type: str, preflight: PreflightReport) -> str:
     if issues:
         return issues[0]
     if not _start_experiment_supported(experiment_type):
-        return "Wavelength scan Start Experiment orchestration is not yet fully wired."
-    return "Clear"
+        return "Wavelength scan Start Run orchestration is not yet fully wired."
+    return "No blocking or warning issues remain."
 
 
 def _experiment_state_summary(
@@ -953,18 +1274,20 @@ def _experiment_state_summary(
 ) -> tuple[str, str]:
     if latest_state is not None:
         if latest_state.phase in {RunPhase.STARTING, RunPhase.RUNNING, RunPhase.STOPPING}:
-            return "Experiment running", phase_tone(latest_state.phase)
+            return latest_state.phase.value.replace("_", " ").title(), phase_tone(latest_state.phase)
         if latest_state.phase == RunPhase.COMPLETED:
-            return "Experiment stopped", "good"
+            return "Completed", "good"
         if latest_state.phase == RunPhase.ABORTED:
-            return "Experiment aborted", "warn"
+            return "Aborted", "warn"
         if latest_state.phase == RunPhase.FAULTED:
-            return "Experiment faulted", "bad"
+            return "Faulted", "bad"
         return latest_state.phase.value.replace("_", " ").title(), phase_tone(latest_state.phase)
     if not preflight.ready_to_start:
         return "Preflight blocked", "warn"
     if _start_experiment_ready(experiment_type, preflight):
-        return "Preflight ok", "good"
+        return "Validated", "good"
+    if preflight.ready_to_start:
+        return "Validated with limits", "warn"
     return "Idle", "neutral"
 
 
@@ -1003,6 +1326,21 @@ def _operator_issue_message(target: str) -> str:
 
 def _surface_badges(surface: str, draft: OperatorDraftState) -> tuple[StatusBadge, ...]:
     badge_map = {
+        "experiment": (
+            StatusBadge(label="Default workflow", tone="good"),
+            StatusBadge(label="Mission control", tone="info"),
+            StatusBadge(label=f"{experiment_type_label(draft.experiment_type)}", tone="neutral"),
+        ),
+        "setup": (
+            StatusBadge(label="Prepare and validate", tone="good"),
+            StatusBadge(label="Simple-first", tone="good"),
+            StatusBadge(label="Advanced on demand", tone="info"),
+        ),
+        "run": (
+            StatusBadge(label="Authoritative run state", tone="good"),
+            StatusBadge(label="Live data review", tone="good"),
+            StatusBadge(label="Results handoff", tone="info"),
+        ),
         "advanced": (
             StatusBadge(label="Expert only", tone="warn"),
             StatusBadge(label="Same canonical path", tone="good"),
@@ -1025,6 +1363,645 @@ def _surface_badges(surface: str, draft: OperatorDraftState) -> tuple[StatusBadg
         ),
     }
     return badge_map[surface]
+
+
+def _experiment_summary_metrics(
+    experiment_type: str,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+    current_session_id: str | None,
+    latest_timeline: RunTimeline | None,
+) -> tuple[StatusItemModel, ...]:
+    run_label, run_tone = _experiment_state_summary(experiment_type, preflight, latest_state)
+    blocking_messages = _operator_preflight_messages(preflight, blocking_only=True)
+    return (
+        StatusItemModel(
+            label="Readiness",
+            value="Validated" if _start_experiment_ready(experiment_type, preflight) else "Attention",
+            tone="good" if _start_experiment_ready(experiment_type, preflight) else "warn",
+            detail="The Experiment page stays on the canonical preflight and orchestration path.",
+        ),
+        StatusItemModel(label="Run state", value=run_label, tone=run_tone),
+        StatusItemModel(
+            label="Session",
+            value=current_session_id or "Not selected",
+            tone="neutral",
+            detail="Current draft or selected session context.",
+        ),
+        StatusItemModel(
+            label="Latest timeline",
+            value=f"{len(latest_timeline.events)} events" if latest_timeline is not None else "No run yet",
+            tone="info" if latest_timeline is not None else "neutral",
+            detail=(
+                f"{len(latest_timeline.live_data_points)} live samples recorded"
+                if latest_timeline is not None
+                else (blocking_messages[0] if blocking_messages else "Start a run to populate timeline events and live traces.")
+            ),
+        ),
+    )
+
+
+def _experiment_workflow_actions(
+    current_session_id: str | None,
+    latest_state: RunState | None,
+) -> tuple[SurfaceActionModel, ...]:
+    actions: list[SurfaceActionModel] = [
+        SurfaceActionModel(
+            label="Open Setup Workspace",
+            route="setup",
+            tone="secondary",
+            helper_text="Focus on recipe review, hardware readiness, and preflight.",
+        ),
+        SurfaceActionModel(
+            label="Open Run Workspace",
+            route="run",
+            tone="secondary",
+            helper_text="Focus on authoritative run state, live traces, and post-run handoff.",
+        ),
+        SurfaceActionModel(
+            label="Service Diagnostics",
+            route="service",
+            tone="ghost",
+            helper_text="Use expert-only diagnostics and recovery without polluting normal operation.",
+        ),
+    ]
+    session_id = current_session_id or (latest_state.session_id if latest_state is not None else None)
+    actions.append(
+        SurfaceActionModel(
+            label="Open Results",
+            route="results",
+            session_id=session_id,
+            tone="secondary",
+            helper_text=(
+                "Open the current session in Results."
+                if session_id is not None
+                else "Open the persisted session catalog."
+            ),
+        )
+    )
+    return tuple(actions)
+
+
+def _experiment_callouts(
+    scenario: SimulatorScenarioContext,
+    experiment_type: str,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+) -> tuple[CalloutModel, ...]:
+    callouts = [
+        CalloutModel(
+            title="One canonical workflow",
+            body="Experiment remains the default mission-control surface even when Setup and Run are opened as focused workspaces.",
+            tone="good",
+        ),
+        CalloutModel(
+            title="Simulator context",
+            body=f"{scenario.label}: {scenario.description}",
+            tone="info",
+        ),
+    ]
+    if not _start_experiment_supported(experiment_type):
+        callouts.append(
+            CalloutModel(
+                title="Scan start remains limited",
+                body="Scan controls are visible and honest, but Start Run remains fixed-wavelength only in this runtime.",
+                tone="warn",
+            )
+        )
+    if latest_state is not None and latest_state.phase == RunPhase.COMPLETED:
+        callouts.append(
+            CalloutModel(
+                title="Latest run completed",
+                body="The latest run completed on the canonical path and its saved session is ready for Results review.",
+                tone="good",
+            )
+        )
+    if latest_state is not None and latest_state.phase == RunPhase.FAULTED and latest_state.latest_fault is not None:
+        callouts.append(
+            CalloutModel(
+                title="Latest run fault",
+                body=latest_state.latest_fault.message,
+                tone="bad",
+            )
+        )
+    if not preflight.ready_to_start:
+        callouts.append(
+            CalloutModel(
+                title="Blocking issues remain explicit",
+                body="Experiment does not hide readiness failures. Clear the reported issues before starting.",
+                tone="warn",
+                items=_operator_preflight_messages(preflight, blocking_only=True),
+            )
+        )
+    return tuple(callouts)
+
+
+def _experiment_configuration_panels(
+    draft: OperatorDraftState,
+    scenario: SimulatorScenarioContext,
+    preflight: PreflightReport,
+) -> tuple[SummaryPanel, ...]:
+    calibration = scenario.recipe.calibration_references[0] if scenario.recipe.calibration_references else None
+    return (
+        SummaryPanel(
+            title="Current configuration",
+            subtitle="What the operator is about to run.",
+            items=(
+                f"Session name: {draft.session_label}",
+                f"Sample: {draft.sample_id}",
+                f"Operating mode: {experiment_type_label(draft.experiment_type)}",
+                f"Emission mode: {draft.emission_mode.value.upper()}",
+                (
+                    f"Tune target: {draft.tune_target_cm1:.2f} cm^-1"
+                    if draft.experiment_type == FIXED_WAVELENGTH_EXPERIMENT_TYPE
+                    else f"Scan range: {draft.scan_start_cm1:.2f} to {draft.scan_stop_cm1:.2f} cm^-1"
+                ),
+            ),
+        ),
+        SummaryPanel(
+            title="Preflight focus",
+            subtitle="Why the current state is ready, warning, or blocked.",
+            items=(
+                f"Checks evaluated: {len(preflight.checks)}",
+                f"Blocking issues: {len(_operator_preflight_messages(preflight, blocking_only=True))}",
+                f"Warnings: {len(_operator_preflight_messages(preflight, warning_only=True))}",
+                f"Calibration: {calibration.calibration_id if calibration else 'none'}",
+                f"MUX route set: {preflight.mux_summary.route_set_name}",
+            ),
+        ),
+    )
+
+
+def _setup_summary_metrics(
+    experiment_type: str,
+    preflight: PreflightReport,
+    current_session_id: str | None,
+    device_cards: tuple[DeviceSummaryCard, ...],
+) -> tuple[StatusItemModel, ...]:
+    good_devices, warn_devices, bad_devices = _device_card_tone_counts(device_cards)
+    return (
+        StatusItemModel(
+            label="Setup readiness",
+            value="Validated" if _start_experiment_ready(experiment_type, preflight) else "Attention",
+            tone="good" if _start_experiment_ready(experiment_type, preflight) else "warn",
+            detail="Validated setup can move directly into the focused Run workspace.",
+        ),
+        StatusItemModel(
+            label="Blocking issues",
+            value=str(len(_operator_preflight_messages(preflight, blocking_only=True))),
+            tone="good" if preflight.ready_to_start else "bad",
+            detail=_run_issue_summary(experiment_type, preflight),
+        ),
+        StatusItemModel(
+            label="Device posture",
+            value=f"{good_devices} ready / {warn_devices} warn / {bad_devices} fault",
+            tone="bad" if bad_devices else ("warn" if warn_devices else "good"),
+            detail="Hardware visibility is first-class here before the run starts.",
+        ),
+        StatusItemModel(
+            label="Current session",
+            value=current_session_id or "Not selected",
+            tone="neutral",
+            detail="The session context that will carry the next run and results.",
+        ),
+    )
+
+
+def _setup_workflow_actions(
+    current_session_id: str | None,
+    preflight: PreflightReport,
+) -> tuple[SurfaceActionModel, ...]:
+    return (
+        SurfaceActionModel(
+            label="Open Run Workspace",
+            route="run",
+            tone="secondary",
+            helper_text=(
+                "Setup is validated. Move into Run for lifecycle monitoring."
+                if preflight.ready_to_start
+                else "Run remains available, but Setup is still reporting blocking or warning states."
+            ),
+        ),
+        SurfaceActionModel(
+            label="Review Results",
+            route="results",
+            session_id=current_session_id,
+            tone="ghost",
+            helper_text=(
+                "Open the current session in Results."
+                if current_session_id is not None
+                else "Browse saved sessions while Setup work continues."
+            ),
+        ),
+        SurfaceActionModel(
+            label="Advanced Detail",
+            route="advanced",
+            tone="ghost",
+            helper_text="Inspect timing, routing, and guarded defaults without crowding the main setup path.",
+        ),
+    )
+
+
+def _setup_callouts(
+    scenario: SimulatorScenarioContext,
+    experiment_type: str,
+    preflight: PreflightReport,
+) -> tuple[CalloutModel, ...]:
+    callouts = [
+        CalloutModel(
+            title="Setup stays task-oriented",
+            body="Routine operators should understand what is selected, what is blocked, and whether the run is safe to start without reading architecture detail.",
+            tone="good",
+        ),
+        CalloutModel(
+            title="Scenario context",
+            body=f"{scenario.label}: {scenario.description}",
+            tone="info",
+        ),
+    ]
+    if not preflight.ready_to_start:
+        callouts.append(
+            CalloutModel(
+                title="Blocking issues",
+                body="Preflight is still stopping the canonical run path.",
+                tone="warn",
+                items=_operator_preflight_messages(preflight, blocking_only=True),
+            )
+        )
+    if not _start_experiment_supported(experiment_type):
+        callouts.append(
+            CalloutModel(
+                title="Scan setup is honest about limits",
+                body="Scan recipe controls are reviewable here, but Start Run remains fixed-wavelength only in this runtime.",
+                tone="warn",
+            )
+        )
+    return tuple(callouts)
+
+
+def _setup_readiness_panels(
+    draft: OperatorDraftState,
+    scenario: SimulatorScenarioContext,
+    preflight: PreflightReport,
+    current_session_id: str | None,
+) -> tuple[SummaryPanel, ...]:
+    calibration = scenario.recipe.calibration_references[0] if scenario.recipe.calibration_references else None
+    mapping = scenario.recipe.time_to_wavenumber_mapping
+    return (
+        SummaryPanel(
+            title="Experiment selection",
+            subtitle="Compact review of the operator-facing recipe state.",
+            items=(
+                f"Current session: {current_session_id or 'not selected'}",
+                f"Recipe: {scenario.recipe.title}",
+                f"Operating mode: {experiment_type_label(draft.experiment_type)}",
+                f"Emission mode: {draft.emission_mode.value.upper()}",
+                f"HF2 transfer rate: {draft.hf2_sample_rate_hz:.0f} Hz",
+            ),
+        ),
+        SummaryPanel(
+            title="Preflight summary",
+            subtitle="Current validation outcome from the canonical control-plane preflight path.",
+            items=(
+                f"Ready to start: {'yes' if preflight.ready_to_start else 'no'}",
+                f"Checks evaluated: {len(preflight.checks)}",
+                f"Blocking issues: {len(_operator_preflight_messages(preflight, blocking_only=True))}",
+                f"Warnings: {len(_operator_preflight_messages(preflight, warning_only=True))}",
+                f"Generated: {preflight.generated_at.isoformat()}",
+            ),
+        ),
+        SummaryPanel(
+            title="Calibration and defaults",
+            subtitle="Guarded defaults remain visible without pretending they are routine operator edits.",
+            items=(
+                f"Calibration reference: {calibration.calibration_id if calibration else 'none'}",
+                f"Mapping id: {mapping.mapping_id if mapping else 'none'}",
+                f"MUX route set: {preflight.mux_summary.route_set_name}",
+                f"Pico mode: {preflight.pico_summary.mode.value}",
+                f"Acquisition mode: {preflight.pump_probe_summary.acquisition_timing_mode.value}",
+            ),
+        ),
+    )
+
+
+def _setup_advanced_sections(
+    scenario: SimulatorScenarioContext,
+    preflight: PreflightReport,
+) -> tuple[AdvancedSectionModel, ...]:
+    summary_panels = _summary_panels_from_preflight(scenario, preflight)
+    return (
+        AdvancedSectionModel(
+            title="Timing and synchronization detail",
+            subtitle="Expert timing review stays available without dominating the normal setup path.",
+            summary_panels=(summary_panels[1], summary_panels[2], summary_panels[3]),
+        ),
+        AdvancedSectionModel(
+            title="Acquisition and routing detail",
+            subtitle="HF2 profile, Pico secondary capture, and named routing stay grouped for experts.",
+            summary_panels=(summary_panels[0], summary_panels[4], summary_panels[5]),
+        ),
+    )
+
+
+def _run_summary_metrics(
+    experiment_type: str,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+    latest_timeline: RunTimeline | None,
+    current_session_id: str | None,
+) -> tuple[StatusItemModel, ...]:
+    run_label, run_tone = _experiment_state_summary(experiment_type, preflight, latest_state)
+    live_points = len(latest_timeline.live_data_points) if latest_timeline is not None else 0
+    return (
+        StatusItemModel(label="Current phase", value=run_label, tone=run_tone),
+        StatusItemModel(
+            label="Session",
+            value=current_session_id or "Not selected",
+            tone="neutral",
+            detail="The session attached to the latest canonical run timeline.",
+        ),
+        StatusItemModel(
+            label="Timeline",
+            value=f"{len(latest_timeline.states)} states" if latest_timeline is not None else "No run timeline",
+            tone="info" if latest_timeline is not None else "warn",
+            detail=(
+                f"{len(latest_timeline.events)} events recorded"
+                if latest_timeline is not None
+                else "Start Run to populate the authoritative timeline."
+            ),
+        ),
+        StatusItemModel(
+            label="Live data",
+            value=f"{live_points} samples" if live_points else "No live samples",
+            tone="good" if live_points else "neutral",
+            detail="Live previews come from the authoritative run timeline instead of UI-local buffers.",
+        ),
+    )
+
+
+def _run_workflow_actions(current_session_id: str | None) -> tuple[SurfaceActionModel, ...]:
+    return (
+        SurfaceActionModel(
+            label="Back to Setup",
+            route="setup",
+            tone="secondary",
+            helper_text="Review preflight and recipe details without leaving the canonical workflow.",
+        ),
+        SurfaceActionModel(
+            label="Mission Control",
+            route="experiment",
+            tone="ghost",
+            helper_text="Return to the default Experiment overview surface.",
+        ),
+        SurfaceActionModel(
+            label="Open Results",
+            route="results",
+            session_id=current_session_id,
+            tone="secondary",
+            helper_text=(
+                "Open the current session in Results."
+                if current_session_id is not None
+                else "Browse persisted sessions after or before a run."
+            ),
+        ),
+    )
+
+
+def _run_callouts(
+    scenario: SimulatorScenarioContext,
+    experiment_type: str,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+    latest_timeline: RunTimeline | None,
+) -> tuple[CalloutModel, ...]:
+    callouts = [
+        CalloutModel(
+            title="Authoritative run surface",
+            body="Run shows control-plane state, live timeline data, and hardware posture. It does not invent orchestration logic in the UI.",
+            tone="good",
+        ),
+        CalloutModel(
+            title="Simulator lifecycle note",
+            body="This simulator records STARTING and RUNNING phases in the authoritative timeline, then completes synchronously. Abort is only available when an active run still exists.",
+            tone="info",
+        ),
+        CalloutModel(
+            title="Scenario context",
+            body=f"{scenario.label}: {scenario.description}",
+            tone="info",
+        ),
+    ]
+    if latest_timeline is not None:
+        callouts.append(
+            CalloutModel(
+                title="Latest run timeline captured",
+                body=f"{len(latest_timeline.events)} events and {len(latest_timeline.live_data_points)} live samples are available for review.",
+                tone="good",
+            )
+        )
+    if latest_state is not None and latest_state.phase == RunPhase.FAULTED and latest_state.latest_fault is not None:
+        callouts.append(
+            CalloutModel(
+                title="Fault surfaced explicitly",
+                body=latest_state.latest_fault.message,
+                tone="bad",
+            )
+        )
+    if not _start_experiment_supported(experiment_type) and preflight.ready_to_start:
+        callouts.append(
+            CalloutModel(
+                title="Scan start remains explicitly unavailable",
+                body="The Run surface stays visible for scan review, but the canonical Start Run button remains fixed-wavelength only.",
+                tone="warn",
+            )
+        )
+    return tuple(callouts)
+
+
+def _run_metadata_panels(
+    draft: OperatorDraftState,
+    preflight: PreflightReport,
+    latest_state: RunState | None,
+    latest_timeline: RunTimeline | None,
+    current_session_id: str | None,
+) -> tuple[SummaryPanel, ...]:
+    progress_percent = (
+        f"{(latest_state.progress_fraction or 0.0) * 100:.0f}%"
+        if latest_state is not None and latest_state.progress_fraction is not None
+        else "n/a"
+    )
+    run_id = latest_timeline.run_id if latest_timeline is not None else "n/a"
+    return (
+        SummaryPanel(
+            title="Run context",
+            subtitle="The current session and run identifiers that anchor the live workspace.",
+            items=(
+                f"Run id: {run_id}",
+                f"Session: {current_session_id or 'not selected'}",
+                f"Operating mode: {experiment_type_label(draft.experiment_type)}",
+                f"Emission mode: {draft.emission_mode.value.upper()}",
+                f"Progress: {progress_percent}",
+            ),
+        ),
+        SummaryPanel(
+            title="Timing and acquisition",
+            subtitle="The high-level timing and acquisition context behind the current run view.",
+            items=(
+                f"T0 label: {preflight.timing_summary.t0_label}",
+                f"Probe timing mode: {preflight.pump_probe_summary.probe_timing_mode.value}",
+                f"Acquisition timing mode: {preflight.pump_probe_summary.acquisition_timing_mode.value}",
+                f"Markers: {', '.join(marker.value for marker in preflight.selected_markers) if preflight.selected_markers else 'none'}",
+                f"Pico mode: {preflight.pico_summary.mode.value}",
+            ),
+        ),
+        SummaryPanel(
+            title="Run handoff",
+            subtitle="What happens next after the current run state.",
+            items=(
+                (
+                    "Open Results for persisted-session review."
+                    if latest_state is not None and latest_state.phase == RunPhase.COMPLETED
+                    else "Clear blocking issues and start the run."
+                    if latest_state is None
+                    else "Review Service for diagnostics before retrying."
+                    if latest_state.phase == RunPhase.FAULTED
+                    else "Results remains available even for partial or aborted sessions."
+                ),
+                f"Timeline events: {len(latest_timeline.events) if latest_timeline is not None else 0}",
+                f"Live samples: {len(latest_timeline.live_data_points) if latest_timeline is not None else 0}",
+            ),
+        ),
+    )
+
+
+def _run_tables(latest_timeline: RunTimeline | None) -> tuple[TableModel, ...]:
+    tables = [
+        TableModel(
+            title="Lifecycle coverage",
+            subtitle="How the current runtime represents the supported run lifecycle.",
+            headers=("Lifecycle state", "Current support", "Meaning"),
+            rows=(
+                ("Idle", "explicit", "No authoritative run has started yet."),
+                ("Validated", "explicit", "Preflight passed and Start Run is available."),
+                ("Starting", "timeline", "Captured in the authoritative run timeline once a run starts."),
+                ("Running", "timeline", "Captured in the authoritative run timeline while acquisition is active."),
+                ("Aborting", "not distinct", "Current runtime aborts directly to Aborted without a separate intermediate phase."),
+                ("Aborted", "explicit", "Operator abort is recorded and preserved for partial-session review."),
+                ("Completed", "explicit", "Successful completion is recorded and handed off to Results."),
+                ("Faulted", "explicit", "Vendor or driver faults surface here without UI-side recovery magic."),
+            ),
+        )
+    ]
+    if latest_timeline is not None:
+        tables.append(
+            TableModel(
+                title="Latest run timeline",
+                subtitle="Authoritative state progression emitted by the current run timeline.",
+                headers=("Phase", "Active step", "Progress", "Last event"),
+                rows=tuple(
+                    (
+                        state.phase.value,
+                        state.active_step or "n/a",
+                        f"{(state.progress_fraction or 0.0) * 100:.0f}%",
+                        state.last_event_id or "n/a",
+                    )
+                    for state in latest_timeline.states
+                ),
+            )
+        )
+    return tuple(tables)
+
+
+def _run_post_run_actions(
+    current_session_id: str | None,
+    latest_state: RunState | None,
+) -> tuple[SurfaceActionModel, ...]:
+    if current_session_id is None:
+        return ()
+    results_helper = (
+        "Persisted review is ready."
+        if latest_state is not None and latest_state.phase == RunPhase.COMPLETED
+        else "Results remains available for completed, aborted, and faulted sessions."
+    )
+    return (
+        SurfaceActionModel(
+            label="Open Results",
+            route="results",
+            session_id=current_session_id,
+            tone="secondary",
+            helper_text=results_helper,
+        ),
+        SurfaceActionModel(
+            label="Analyze Session",
+            route="analyze",
+            session_id=current_session_id,
+            tone="ghost",
+            helper_text="Scientific evaluation remains downstream of persisted session truth.",
+        ),
+    )
+
+
+def _timeline_event_log(latest_timeline: RunTimeline | None) -> tuple[EventLogItem, ...]:
+    if latest_timeline is None:
+        return ()
+    return tuple(
+        EventLogItem(
+            timestamp=event.emitted_at,
+            source=event.source,
+            message=event.message,
+            tone=event_tone(event.event_type),
+        )
+        for event in latest_timeline.events
+    )
+
+
+def _timeline_trace_previews(latest_timeline: RunTimeline | None) -> tuple[TracePreviewModel, ...]:
+    if latest_timeline is None or not latest_timeline.live_data_points:
+        return ()
+    grouped = _group_live_data_points(latest_timeline.live_data_points)
+    previews: list[TracePreviewModel] = []
+    for points in grouped[:3]:
+        previews.append(_trace_preview_from_live_data(points))
+    return tuple(previews)
+
+
+def _group_live_data_points(live_data_points: tuple[LiveDataPoint, ...]) -> list[tuple[LiveDataPoint, ...]]:
+    grouped: dict[tuple[str, str], list[LiveDataPoint]] = {}
+    for point in live_data_points:
+        key = (point.source_role.value, point.stream_name)
+        grouped.setdefault(key, []).append(point)
+    return [tuple(points) for points in grouped.values()]
+
+
+def _trace_preview_from_live_data(points: tuple[LiveDataPoint, ...]) -> TracePreviewModel:
+    first = points[0]
+    axis_values = tuple(point.axis_value for point in points)
+    y_values = tuple(point.value for point in points)
+    role_label = "Primary live data" if first.source_role.value == "primary_raw" else "Secondary monitor"
+    title = f"{role_label} — {first.stream_name}"
+    subtitle = "Authoritative run-timeline preview for the latest simulator-backed run."
+    return TracePreviewModel(
+        title=title,
+        subtitle=subtitle,
+        sample_count_label=f"{len(points)} samples",
+        axis_label=f"{first.axis_label} ({first.axis_units})" if first.axis_units else first.axis_label,
+        axis_start_label=_format_measurement(min(axis_values), first.axis_units),
+        axis_end_label=_format_measurement(max(axis_values), first.axis_units),
+        value_min_label=_format_measurement(min(y_values), first.units),
+        value_max_label=_format_measurement(max(y_values), first.units),
+        polyline_points=_sparkline_points(tuple((point.axis_value, point.value) for point in points)),
+        note_lines=(
+            f"Source role: {first.source_role.value}",
+            f"Last captured: {points[-1].captured_at.isoformat()}",
+        ),
+    )
+
+
+def _device_card_tone_counts(device_cards: tuple[DeviceSummaryCard, ...]) -> tuple[int, int, int]:
+    good = sum(1 for card in device_cards if card.tone == "good")
+    warn = sum(1 for card in device_cards if card.tone == "warn")
+    bad = sum(1 for card in device_cards if card.tone == "bad")
+    return good, warn, bad
 
 
 def _summary_panels_from_preflight(
@@ -1408,6 +2385,16 @@ def _results_export_actions(
                 "Select a saved session first."
                 if disabled
                 else "Reprocessing is reserved for a later Analyze/backend pass."
+            ),
+        ),
+        SurfaceActionModel(
+            label="Compare to Baseline",
+            tone="ghost",
+            disabled=True,
+            helper_text=(
+                "Select a saved session first."
+                if disabled
+                else "Baseline comparison is recognized here but remains an Analyze/backend-owned capability."
             ),
         ),
         SurfaceActionModel(
@@ -1871,8 +2858,8 @@ def _analyze_callouts(detail: SessionDetail) -> tuple[CalloutModel, ...]:
             tone="good",
         ),
         CalloutModel(
-            title="Backend wiring still implied",
-            body="Processing, analysis, and export actions remain intentionally placeholder-backed until the visible workflow is reviewed.",
+            title="Explicit disabled analysis actions",
+            body="Processing, analysis, and export actions stay visibly disabled here until their owning backend boundaries are wired.",
             tone="warn",
             items=(
                 f"Processed outputs recorded now: {len(detail.processed_artifacts)}",
@@ -1903,6 +2890,138 @@ def _analyze_tables(detail: SessionDetail) -> tuple[TableModel, ...]:
                 ("Processing job runner", "To populate processed outputs from saved raw artifacts"),
                 ("Analysis job runner", "To populate derived metrics and comparison sections"),
                 ("Export/report generator", "To turn reviewed results into reproducible outputs"),
+            ),
+        ),
+    )
+
+
+def _service_page_state(device_cards: tuple[DeviceSummaryCard, ...]) -> PageStateModel | None:
+    bad_cards = tuple(card for card in device_cards if card.tone == "bad")
+    warn_cards = tuple(card for card in device_cards if card.tone == "warn")
+    if bad_cards:
+        return fault_state(
+            "Bench attention required",
+            "One or more service subsystems are offline or faulted.",
+            details=tuple(f"{card.device_label}: {card.summary}" for card in bad_cards),
+        )
+    if warn_cards:
+        return warning_state(
+            "Diagnostics show degraded capacity",
+            "At least one subsystem is available with warnings or optional capability limits.",
+            details=tuple(f"{card.device_label}: {card.summary}" for card in warn_cards),
+        )
+    return success_state(
+        "Diagnostics nominal",
+        "All simulator-backed service subsystems report ready state for this scenario.",
+    )
+
+
+def _service_toolbar_actions(session_count: int) -> tuple[SurfaceActionModel, ...]:
+    return (
+        SurfaceActionModel(
+            label="Back to Experiment",
+            route="experiment",
+            tone="secondary",
+            helper_text="Return to the default operator mission-control surface.",
+        ),
+        SurfaceActionModel(
+            label="Advanced Timing",
+            route="advanced",
+            tone="ghost",
+            helper_text="Use Advanced for expert timing and routing review that is not bench-owned recovery work.",
+        ),
+        SurfaceActionModel(
+            label="Review Results",
+            route="results",
+            tone="ghost",
+            helper_text=f"{session_count} persisted session(s) are available for saved-session review.",
+        ),
+    )
+
+
+def _service_maintenance_actions(state: PageStateModel | None) -> tuple[SurfaceActionModel, ...]:
+    helper = (
+        "This action is intentionally disabled until a dedicated service boundary exists."
+        if state is None or state.kind.value != "fault"
+        else "The need is visible, but controlled recovery actions are not yet exposed through the runtime boundary."
+    )
+    return (
+        SurfaceActionModel(
+            label="Capture Config Snapshot",
+            tone="secondary",
+            disabled=True,
+            helper_text=helper,
+        ),
+        SurfaceActionModel(
+            label="Verify Timing Stack",
+            tone="ghost",
+            disabled=True,
+            helper_text="Timing verification is represented here explicitly, but the action is not yet boundary-backed.",
+        ),
+        SurfaceActionModel(
+            label="Reapply Guarded Calibration",
+            tone="ghost",
+            disabled=True,
+            helper_text="Calibration custody remains bench-owned and is intentionally unavailable as a casual UI action.",
+        ),
+        SurfaceActionModel(
+            label="Attempt Recovery",
+            tone="primary",
+            disabled=True,
+            helper_text=helper,
+        ),
+    )
+
+
+def _service_calibration_panels(scenario: SimulatorScenarioContext) -> tuple[SummaryPanel, ...]:
+    calibration = scenario.recipe.calibration_references[0] if scenario.recipe.calibration_references else None
+    mapping = scenario.recipe.time_to_wavenumber_mapping
+    return (
+        SummaryPanel(
+            title="Calibration custody",
+            subtitle="Bench-owned calibration references remain visible without pretending they are operator tuning fields.",
+            items=(
+                f"Calibration reference: {calibration.calibration_id if calibration else 'none'}",
+                f"Calibration version: {calibration.version if calibration else 'none'}",
+                f"Location: {calibration.location if calibration else 'n/a'}",
+            ),
+        ),
+        SummaryPanel(
+            title="Mapping defaults",
+            subtitle="Guarded time-to-wavenumber context stays explicit for diagnostics and provenance review.",
+            items=(
+                f"Mapping id: {mapping.mapping_id if mapping else 'none'}",
+                f"Start wavenumber: {mapping.start_wavenumber_cm1 if mapping else 'n/a'}",
+                f"End wavenumber: {mapping.end_wavenumber_cm1 if mapping else 'n/a'}",
+                f"Scan speed: {mapping.scan_speed_cm1_per_s if mapping else 'n/a'}",
+            ),
+        ),
+    )
+
+
+def _service_recovery_panels(
+    device_cards: tuple[DeviceSummaryCard, ...],
+    session_count: int,
+) -> tuple[SummaryPanel, ...]:
+    good_devices, warn_devices, bad_devices = _device_card_tone_counts(device_cards)
+    return (
+        SummaryPanel(
+            title="Current diagnostic posture",
+            subtitle="Quick expert summary of subsystem health.",
+            items=(
+                f"Ready devices: {good_devices}",
+                f"Warn devices: {warn_devices}",
+                f"Fault/offline devices: {bad_devices}",
+                f"Persisted sessions available for replay-safe diagnosis: {session_count}",
+            ),
+        ),
+        SummaryPanel(
+            title="Recovery rules",
+            subtitle="What Service does and does not do in the current runtime.",
+            items=(
+                "Service shows vendor and subsystem status explicitly.",
+                "Disabled controls indicate recognized work that is not yet boundary-backed.",
+                "Recovery cannot bypass the canonical control-plane path.",
             ),
         ),
     )

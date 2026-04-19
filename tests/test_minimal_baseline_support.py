@@ -21,12 +21,13 @@ class MinimalBaselineSupportTests(unittest.TestCase):
         self.addCleanup(tempdir.cleanup)
         return Path(tempdir.name)
 
-    def test_nominal_runtime_seeds_session_defaults_and_minimal_session_surface(self) -> None:
+    def test_nominal_runtime_seeds_session_defaults_and_finished_shell_context(self) -> None:
         runtimes = create_simulator_runtime_map(storage_root=self._temp_root())
         operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
+        setup_page = asyncio.run(runtimes["nominal"].get_setup_page())
 
         field_values = {field.name: field.value for field in operate_page.session_panel.fields}
-        self.assertEqual(field_values["session_id_input"], "saved-session-001")
+        self.assertEqual(field_values["session_id_input"], "saved-session-001-rerun")
         self.assertEqual(field_values["session_label"], "MIRcat 1850 cm^-1 baseline")
         self.assertEqual(field_values["sample_id"], "polymer-film-a12")
         self.assertEqual(
@@ -34,9 +35,10 @@ class MinimalBaselineSupportTests(unittest.TestCase):
             "Fixed MIRcat baseline with continuous HF2LI acquisition.",
         )
         self.assertIn("recent_session_id", field_values)
-        self.assertEqual(operate_page.session_panel.status_items, ())
-        self.assertFalse(hasattr(operate_page, "recent_activity"))
-        self.assertFalse(hasattr(operate_page, "live_status"))
+        self.assertGreaterEqual(len(operate_page.summary_metrics), 4)
+        self.assertGreaterEqual(len(operate_page.hardware_cards), 6)
+        self.assertGreaterEqual(len(setup_page.readiness_panels), 3)
+        self.assertGreaterEqual(len(setup_page.advanced_sections), 2)
 
     def test_mircat_simulator_supports_baseline_transitions(self) -> None:
         context = SupportedV1SimulatorCatalog().get_context("nominal")
@@ -88,11 +90,12 @@ class MinimalBaselineSupportTests(unittest.TestCase):
         self.assertFalse(stopped.vendor_status["capture_active"])
         self.assertIn("stopped", stopped.status_summary.lower())
 
-    def test_run_panel_exposes_preflight_and_stop_labels_for_baseline(self) -> None:
+    def test_run_panel_exposes_validated_state_and_finished_actions_for_baseline(self) -> None:
         runtimes = create_simulator_runtime_map(storage_root=self._temp_root())
 
         nominal_page = asyncio.run(runtimes["nominal"].get_operate_page())
         blocked_page = asyncio.run(runtimes["blocked_timing"].get_operate_page())
+        action_labels = tuple(button.label for button in nominal_page.run_panel.actions)
 
         nominal_state = next(
             item.value for item in nominal_page.run_panel.status_items if item.label == "Current run state"
@@ -101,7 +104,8 @@ class MinimalBaselineSupportTests(unittest.TestCase):
             item.value for item in blocked_page.run_panel.status_items if item.label == "Current run state"
         )
 
-        self.assertEqual(nominal_state, "Preflight ok")
+        self.assertEqual(action_labels, ("Run Preflight", "Start Run", "Abort Run"))
+        self.assertEqual(nominal_state, "Validated")
         self.assertEqual(blocked_state, "Preflight blocked")
 
 

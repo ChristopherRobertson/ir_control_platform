@@ -29,7 +29,9 @@ from ircp_ui_shell import (
     OperatePageModel,
     ResultsDownload,
     ResultsPageModel,
+    RunPageModel,
     ServicePageModel,
+    SetupPageModel,
     UiRuntimeGateway,
 )
 
@@ -57,7 +59,9 @@ from .page_builders import (
     build_header_status,
     build_operate_page,
     build_results_page,
+    build_run_page,
     build_service_page,
+    build_setup_page,
     device_card_from_status,
 )
 from .runtime_helpers import json_bytes, json_lines_bytes
@@ -65,6 +69,20 @@ from .runtime_helpers import json_bytes, json_lines_bytes
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _next_session_id(preferred: str, existing_session_ids: set[str]) -> str:
+    candidate = preferred.strip() or "session"
+    if candidate not in existing_session_ids:
+        return candidate
+    stem = candidate.split("-rerun", 1)[0]
+    rerun_candidate = f"{stem}-rerun"
+    if rerun_candidate not in existing_session_ids:
+        return rerun_candidate
+    index = 2
+    while f"{stem}-rerun-{index}" in existing_session_ids:
+        index += 1
+    return f"{stem}-rerun-{index}"
 
 
 def _results_session_matches(summary, *, search: str, status_filter: str) -> bool:
@@ -121,15 +139,23 @@ class SimulatorUiRuntime(UiRuntimeGateway):
             latest_manifest = max(scenario.initial_manifests, key=lambda manifest: manifest.updated_at)
             self._selected_session_id = latest_manifest.session_id
             apply_manifest_to_draft(self._draft, latest_manifest, scenario)
+            self._draft.session_id_input = _next_session_id(
+                latest_manifest.session_id,
+                {manifest.session_id for manifest in scenario.initial_manifests},
+            )
 
     async def get_header_status(self, active_route: str) -> HeaderStatus:
         preflight = await self._ensure_preflight()
+        device_statuses = await self._device_statuses()
         run_phase_label = await self._current_run_phase_label()
         current_session_id = self._draft_session_id or self._selected_session_id or "none"
         ready_to_start = preflight.ready_to_start and self._start_experiment_supported()
         return build_header_status(
             active_route=active_route,
+            scenario=self._scenario,
             draft=self._draft,
+            preflight=preflight,
+            device_statuses=device_statuses,
             current_session_id=current_session_id,
             run_phase_label=run_phase_label,
             ready_to_start=ready_to_start,
@@ -138,16 +164,55 @@ class SimulatorUiRuntime(UiRuntimeGateway):
     async def get_operate_page(self) -> OperatePageModel:
         preflight = await self._ensure_preflight()
         latest_state = await self._latest_run_state()
+        latest_timeline = await self._latest_run_timeline()
         sessions = await self._session_catalog.list_sessions()
-        laser_status = await self._scenario.bundle.mircat.get_status()
-        hf2_status = await self._scenario.bundle.hf2li.get_status()
+        device_statuses = await self._device_statuses()
+        lookup = {status.device_id: status for status in device_statuses}
         return build_operate_page(
             draft=self._draft,
+            scenario=self._scenario,
+            preflight=preflight,
+            latest_state=latest_state,
+            latest_timeline=latest_timeline,
+            sessions=sessions,
+            laser_status=lookup["mircat-qcl"],
+            hf2_status=lookup["hf2li-primary"],
+            device_cards=tuple(device_card_from_status(status) for status in device_statuses),
+            draft_session_id=self._draft_session_id,
+            selected_session_id=self._selected_session_id,
+        )
+
+    async def get_setup_page(self) -> SetupPageModel:
+        preflight = await self._ensure_preflight()
+        latest_state = await self._latest_run_state()
+        sessions = await self._session_catalog.list_sessions()
+        device_statuses = await self._device_statuses()
+        lookup = {status.device_id: status for status in device_statuses}
+        return build_setup_page(
+            draft=self._draft,
+            scenario=self._scenario,
             preflight=preflight,
             latest_state=latest_state,
             sessions=sessions,
-            laser_status=laser_status,
-            hf2_status=hf2_status,
+            laser_status=lookup["mircat-qcl"],
+            hf2_status=lookup["hf2li-primary"],
+            device_cards=tuple(device_card_from_status(status) for status in device_statuses),
+            draft_session_id=self._draft_session_id,
+            selected_session_id=self._selected_session_id,
+        )
+
+    async def get_run_page(self) -> RunPageModel:
+        preflight = await self._ensure_preflight()
+        latest_state = await self._latest_run_state()
+        latest_timeline = await self._latest_run_timeline()
+        device_statuses = await self._device_statuses()
+        return build_run_page(
+            draft=self._draft,
+            scenario=self._scenario,
+            preflight=preflight,
+            latest_state=latest_state,
+            latest_timeline=latest_timeline,
+            device_cards=tuple(device_card_from_status(status) for status in device_statuses),
             draft_session_id=self._draft_session_id,
             selected_session_id=self._selected_session_id,
         )
@@ -290,6 +355,7 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         sessions = await self._session_catalog.list_sessions()
         return build_service_page(
             draft=self._draft,
+            scenario=self._scenario,
             storage_root=self._storage_root,
             session_count=len(sessions),
             device_cards=await self._device_cards(),
@@ -440,6 +506,8 @@ class SimulatorUiRuntime(UiRuntimeGateway):
         self._selected_session_id = result.manifest.session_id
         self._draft_session_id = None
         apply_manifest_to_draft(self._draft, result.manifest, self._scenario)
+        self._draft.session_id_input = await self._suggest_unique_session_id(result.manifest.session_id)
+        self._mark_preflight_dirty()
         return result.manifest
 
     async def connect_laser(self) -> DeviceStatus:
@@ -610,8 +678,13 @@ class SimulatorUiRuntime(UiRuntimeGateway):
             return None
         return await self._coordinator.get_run_state(self._active_run_id)
 
-    async def _device_cards(self) -> tuple[DeviceSummaryCard, ...]:
-        statuses = (
+    async def _latest_run_timeline(self):
+        if self._active_run_id is None:
+            return None
+        return await self._coordinator.get_run_timeline(self._active_run_id)
+
+    async def _device_statuses(self) -> tuple[DeviceStatus, ...]:
+        return (
             await self._scenario.bundle.mircat.get_status(),
             await self._scenario.bundle.hf2li.get_status(),
             await self._scenario.bundle.t660_master.get_status(),
@@ -619,4 +692,11 @@ class SimulatorUiRuntime(UiRuntimeGateway):
             await self._scenario.bundle.mux.get_status(),
             await self._scenario.bundle.picoscope.get_status(),
         )
+
+    async def _device_cards(self) -> tuple[DeviceSummaryCard, ...]:
+        statuses = await self._device_statuses()
         return tuple(device_card_from_status(status) for status in statuses)
+
+    async def _suggest_unique_session_id(self, preferred: str) -> str:
+        sessions = await self._session_catalog.list_sessions()
+        return _next_session_id(preferred, {session.session_id for session in sessions})

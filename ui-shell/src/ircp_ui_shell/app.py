@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from io import BytesIO
 from typing import Callable, Mapping, cast
 from urllib.parse import parse_qs
@@ -14,8 +15,11 @@ from .components import (
     render_layout,
     render_operate_page,
     render_results_page,
+    render_run_page,
     render_service_page,
+    render_setup_page,
 )
+from .models import HeaderStatus, NavigationItem, ScenarioOption
 
 
 StartResponse = Callable[[str, list[tuple[str, str]]], None]
@@ -24,11 +28,17 @@ StartResponse = Callable[[str, list[tuple[str, str]]], None]
 class IRCPUiApp:
     """Dependency-light server-rendered UI shell for simulator-backed development."""
 
-    def __init__(self, runtimes: Mapping[str, UiRuntimeGateway], default_scenario: str = "nominal") -> None:
+    def __init__(
+        self,
+        runtimes: Mapping[str, UiRuntimeGateway],
+        default_scenario: str = "nominal",
+        scenario_catalog: Mapping[str, tuple[str, str]] | None = None,
+    ) -> None:
         if default_scenario not in runtimes:
             raise ValueError(f"Unknown default scenario {default_scenario!r}.")
         self._runtimes = dict(runtimes)
         self._default_scenario = default_scenario
+        self._scenario_catalog = dict(scenario_catalog or {})
 
     def __call__(self, environ: dict[str, object], start_response: StartResponse) -> list[bytes]:
         method = str(environ.get("REQUEST_METHOD", "GET")).upper()
@@ -58,20 +68,28 @@ class IRCPUiApp:
         scenario_id: str,
         query: dict[str, list[str]],
     ) -> list[bytes]:
-        if path in {"/operate", "/setup", "/run"}:
+        if path == "/operate":
             return self._redirect(start_response, self._surface_location("experiment", scenario_id))
         if path in {"/setup/advanced", "/setup/calibrated"}:
             return self._redirect(start_response, self._surface_location("advanced", scenario_id))
         if path == "/experiment":
-            header = asyncio.run(runtime.get_header_status("experiment"))
+            header = self._decorate_header(asyncio.run(runtime.get_header_status("experiment")), scenario_id)
             page = asyncio.run(runtime.get_operate_page())
             return self._html(start_response, render_layout(header, render_operate_page(page, scenario_id)))
+        if path == "/setup":
+            header = self._decorate_header(asyncio.run(runtime.get_header_status("setup")), scenario_id)
+            page = asyncio.run(runtime.get_setup_page())
+            return self._html(start_response, render_layout(header, render_setup_page(page, scenario_id)))
+        if path == "/run":
+            header = self._decorate_header(asyncio.run(runtime.get_header_status("run")), scenario_id)
+            page = asyncio.run(runtime.get_run_page())
+            return self._html(start_response, render_layout(header, render_run_page(page, scenario_id)))
         if path == "/results":
             selected_session_id = _extract_value(query, "session_id")
             search = _extract_value(query, "search") or ""
             status_filter = _extract_value(query, "status") or "all"
             sort_order = _extract_value(query, "sort") or "updated_desc"
-            header = asyncio.run(runtime.get_header_status("results"))
+            header = self._decorate_header(asyncio.run(runtime.get_header_status("results")), scenario_id)
             page = asyncio.run(
                 runtime.get_results_page(
                     selected_session_id=selected_session_id,
@@ -90,16 +108,16 @@ class IRCPUiApp:
             )
             return self._download(start_response, download.filename, download.content_type, download.body)
         if path == "/advanced":
-            header = asyncio.run(runtime.get_header_status("advanced"))
+            header = self._decorate_header(asyncio.run(runtime.get_header_status("advanced")), scenario_id)
             page = asyncio.run(runtime.get_advanced_page())
             return self._html(start_response, render_layout(header, render_advanced_page(page)))
         if path == "/service":
-            header = asyncio.run(runtime.get_header_status("service"))
+            header = self._decorate_header(asyncio.run(runtime.get_header_status("service")), scenario_id)
             page = asyncio.run(runtime.get_service_page())
-            return self._html(start_response, render_layout(header, render_service_page(page)))
+            return self._html(start_response, render_layout(header, render_service_page(page, scenario_id)))
         if path == "/analyze":
             selected_session_id = _extract_value(query, "session_id")
-            header = asyncio.run(runtime.get_header_status("analyze"))
+            header = self._decorate_header(asyncio.run(runtime.get_header_status("analyze")), scenario_id)
             page = asyncio.run(runtime.get_analyze_page(selected_session_id=selected_session_id))
             return self._html(start_response, render_layout(header, render_analyze_page(page, scenario_id)))
         return self._respond(start_response, "404 Not Found", f"No route for {path}")
@@ -185,6 +203,10 @@ class IRCPUiApp:
                 session_id = _require_value(form, "recent_session_id")
                 asyncio.run(runtime.open_saved_session(session_id))
                 return self._redirect(start_response, self._surface_location("experiment", scenario_id))
+            if path == "/results/reopen":
+                session_id = _require_value(form, "recent_session_id")
+                asyncio.run(runtime.open_saved_session(session_id))
+                return self._redirect(start_response, self._surface_location("setup", scenario_id))
             if path == "/experiment/session/delete":
                 session_id = _require_value(form, "recent_session_id")
                 asyncio.run(runtime.delete_saved_session(session_id))
@@ -376,15 +398,18 @@ class IRCPUiApp:
                 )
                 asyncio.run(runtime.disconnect_hf2())
                 return self._redirect(start_response, self._surface_location("experiment", scenario_id))
-            if path == "/experiment/run/preflight":
+            if path in {"/experiment/run/preflight", "/setup/preflight"}:
                 asyncio.run(runtime.run_preflight())
-                return self._redirect(start_response, self._surface_location("experiment", scenario_id))
-            if path == "/experiment/run/start":
+                target = "setup" if path == "/setup/preflight" else "experiment"
+                return self._redirect(start_response, self._surface_location(target, scenario_id))
+            if path in {"/experiment/run/start", "/run/start"}:
                 asyncio.run(runtime.start_run())
-                return self._redirect(start_response, self._surface_location("experiment", scenario_id))
-            if path == "/experiment/run/abort":
+                target = "run" if path == "/run/start" else "experiment"
+                return self._redirect(start_response, self._surface_location(target, scenario_id))
+            if path in {"/experiment/run/abort", "/run/abort"}:
                 asyncio.run(runtime.abort_active_run())
-                return self._redirect(start_response, self._surface_location("experiment", scenario_id))
+                target = "run" if path == "/run/abort" else "experiment"
+                return self._redirect(start_response, self._surface_location(target, scenario_id))
         except Exception as exc:  # pragma: no cover - exercised through page-state projections instead
             return self._respond(start_response, "500 Internal Server Error", str(exc))
         return self._respond(start_response, "404 Not Found", f"No action for {path}")
@@ -416,6 +441,34 @@ class IRCPUiApp:
         if scenario_id == self._default_scenario:
             return f"/{surface}"
         return f"/{surface}?scenario={scenario_id}"
+
+    def _decorate_header(self, header: HeaderStatus, scenario_id: str) -> HeaderStatus:
+        scenario_options = tuple(
+            ScenarioOption(
+                scenario_id=known_scenario_id,
+                label=self._scenario_catalog.get(known_scenario_id, (known_scenario_id.replace("_", " ").title(), ""))[0],
+                description=self._scenario_catalog.get(known_scenario_id, ("", ""))[1],
+                active=known_scenario_id == scenario_id,
+            )
+            for known_scenario_id in self._runtimes
+        )
+        navigation = tuple(
+            NavigationItem(
+                label=label,
+                href=self._surface_location(route, scenario_id),
+                active=header.active_route == route,
+            )
+            for route, label in (
+                ("experiment", "Experiment"),
+                ("setup", "Setup"),
+                ("run", "Run"),
+                ("results", "Results"),
+                ("analyze", "Analyze"),
+                ("advanced", "Advanced"),
+                ("service", "Service"),
+            )
+        )
+        return replace(header, scenario_options=scenario_options, navigation=navigation)
 
     def _read_form(self, environ: dict[str, object]) -> dict[str, list[str]]:
         try:
@@ -469,5 +522,9 @@ def _checkbox_checked(values: Mapping[str, list[str]], key: str) -> bool:
     return value not in {None, "", "0", "false", "False", "off"}
 
 
-def create_ui_app(runtimes: Mapping[str, UiRuntimeGateway], default_scenario: str = "nominal") -> IRCPUiApp:
-    return IRCPUiApp(runtimes=runtimes, default_scenario=default_scenario)
+def create_ui_app(
+    runtimes: Mapping[str, UiRuntimeGateway],
+    default_scenario: str = "nominal",
+    scenario_catalog: Mapping[str, tuple[str, str]] | None = None,
+) -> IRCPUiApp:
+    return IRCPUiApp(runtimes=runtimes, default_scenario=default_scenario, scenario_catalog=scenario_catalog)
