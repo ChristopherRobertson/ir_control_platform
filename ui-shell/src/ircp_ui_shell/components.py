@@ -38,28 +38,30 @@ from .page_state import PageStateModel
 
 APP_CSS = """
 :root {
-  --bg-top: #f4efe3;
-  --bg-bottom: #e6ede8;
-  --surface: rgba(255, 255, 255, 0.92);
-  --surface-strong: rgba(255, 255, 255, 0.97);
-  --border: #d6d0c1;
-  --ink: #172129;
-  --muted: #55606d;
-  --accent: #0f766e;
-  --accent-strong: #115e59;
-  --accent-soft: rgba(15, 118, 110, 0.1);
-  --secondary: #475569;
-  --ghost: #b45309;
-  --danger: #b91c1c;
-  --good-bg: #ddf4e6;
-  --good-border: #6a9f7a;
-  --warn-bg: #fff4d6;
-  --warn-border: #d1a54d;
-  --bad-bg: #ffe4df;
-  --bad-border: #d66855;
-  --info-bg: #e5f0f6;
-  --info-border: #6f93ac;
-  --shadow: 0 14px 36px rgba(24, 37, 51, 0.08);
+  --bg: #e7eaee;
+  --surface: #f8fafc;
+  --surface-strong: #ffffff;
+  --surface-muted: #eff3f7;
+  --rail: #23313f;
+  --rail-border: #3e4d5c;
+  --border: #ccd6e0;
+  --border-strong: #b9c6d4;
+  --ink: #1a2430;
+  --muted: #5f6c79;
+  --accent: #006699;
+  --accent-strong: #00517a;
+  --secondary: #485766;
+  --ghost: #8f5a1f;
+  --danger: #b22929;
+  --good-bg: #dbeedc;
+  --good-border: #70a178;
+  --warn-bg: #f8efcf;
+  --warn-border: #cb9d43;
+  --bad-bg: #f7ddd9;
+  --bad-border: #cf6f60;
+  --info-bg: #e3edf7;
+  --info-border: #7998b2;
+  --shadow: 0 10px 24px rgba(16, 24, 32, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -67,10 +69,7 @@ APP_CSS = """
 body {
   margin: 0;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-  background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 34%),
-    radial-gradient(circle at top right, rgba(139, 94, 52, 0.12), transparent 28%),
-    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  background: linear-gradient(180deg, #edf1f5 0%, #e3e8ed 100%);
   color: var(--ink);
 }
 
@@ -81,24 +80,46 @@ code {
   font-size: 0.92em;
 }
 
-main {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 28px 24px 44px;
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
 }
 
 .shell-header {
-  background:
-    linear-gradient(135deg, rgba(20, 34, 46, 0.98) 0%, rgba(16, 74, 82, 0.94) 60%, rgba(90, 61, 42, 0.94) 100%);
-  color: #f8fbfc;
-  padding: 28px 24px 30px;
-  box-shadow: var(--shadow);
+  background: linear-gradient(180deg, #223140 0%, #1e2a36 100%);
+  color: #f3f7fb;
+  padding: 22px 18px;
+  border-right: 1px solid var(--rail-border);
+  display: grid;
+  align-content: start;
+  gap: 18px;
 }
 
 .shell-header h1 {
-  margin: 0 0 10px;
-  font-size: 2rem;
-  letter-spacing: -0.03em;
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+
+.shell-main {
+  min-width: 0;
+}
+
+main {
+  padding: 18px 20px 28px;
+}
+
+.rail-block {
+  display: grid;
+  gap: 10px;
+}
+
+.rail-label {
+  color: #9fb0c0;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .nav-row, .scenario-row, .badge-row, .surface-badges, .action-row, .toolbar-row {
@@ -107,26 +128,34 @@ main {
   flex-wrap: wrap;
 }
 
-.scenario-row, .nav-row, .badge-row { margin-top: 12px; }
+.scenario-row, .nav-row, .badge-row {
+  margin-top: 0;
+  flex-direction: column;
+  gap: 8px;
+}
 
 .nav-link, .scenario-chip, .badge-pill, .button-link {
-  border-radius: 999px;
-  padding: 8px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
 }
 
 .nav-link, .scenario-chip {
-  color: #f8fbfc;
-  background: rgba(255, 255, 255, 0.06);
+  color: #eef4f8;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+  display: block;
 }
 
 .nav-link.active, .scenario-chip.active {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 125, 183, 0.28);
+  border-color: rgba(115, 195, 231, 0.35);
+  box-shadow: inset 3px 0 0 #6dcaf2;
 }
 
 .badge-pill {
-  background: rgba(255, 255, 255, 0.12);
-  font-size: 0.92rem;
+  background: #f2f6fa;
+  font-size: 0.82rem;
 }
 
 .badge-pill.good { border-color: #88c39a; }
@@ -136,14 +165,14 @@ main {
 
 .page-stack {
   display: grid;
-  gap: 18px;
+  gap: 14px;
 }
 
 .hero {
-  background: var(--surface-strong);
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  padding: 22px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8fb 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 16px 18px;
   box-shadow: var(--shadow);
 }
 
@@ -153,8 +182,9 @@ main {
 
 .panel-subtitle, .hero-subtitle {
   color: var(--muted);
-  margin-top: -4px;
-  margin-bottom: 14px;
+  margin-top: 2px;
+  margin-bottom: 10px;
+  font-size: 0.92rem;
 }
 
 .small {
@@ -165,14 +195,14 @@ main {
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
+  gap: 12px;
 }
 
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 18px;
+  border-radius: 12px;
+  padding: 14px 16px;
   box-shadow: var(--shadow);
 }
 
@@ -183,8 +213,8 @@ main {
 
 .metric-grid {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .results-action-bar {
@@ -230,12 +260,12 @@ main {
 }
 
 .panel.state-accent {
-  border-color: rgba(15, 118, 110, 0.24);
+  border-color: rgba(0, 102, 153, 0.22);
 }
 
 .state-box, .callout {
-  border-radius: 14px;
-  padding: 14px 16px;
+  border-radius: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
 }
 
@@ -262,9 +292,9 @@ main {
 
 .action-row {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-top: 12px;
+  margin-top: 10px;
   align-items: center;
 }
 
@@ -282,8 +312,8 @@ button, .button-link {
   color: white;
   border: none;
   cursor: pointer;
-  padding: 10px 14px;
-  border-radius: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
   font: inherit;
   text-decoration: none;
 }
@@ -332,13 +362,13 @@ button:disabled, .button-link.disabled {
 
 .device-grid {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .status-item, .device-card, .session-card, .summary-row, .event-row {
-  padding: 10px 0;
-  border-top: 1px solid #ebe7db;
+  padding: 8px 0;
+  border-top: 1px solid #dfe6ec;
 }
 
 .status-item:first-child,
@@ -353,9 +383,11 @@ button:disabled, .button-link.disabled {
 .status-label {
   display: inline-block;
   border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 0.82rem;
+  padding: 3px 9px;
+  font-size: 0.76rem;
   background: #edf2f7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .status-label.good { background: #d9f2dd; }
@@ -365,9 +397,9 @@ button:disabled, .button-link.disabled {
 .status-label.neutral { background: #edf2f7; }
 
 .session-card.selected {
-  background: rgba(15, 118, 110, 0.08);
-  border: 1px solid rgba(15, 118, 110, 0.22);
-  border-radius: 14px;
+  background: rgba(0, 102, 153, 0.08);
+  border: 1px solid rgba(0, 102, 153, 0.22);
+  border-radius: 10px;
   margin: 8px -10px 0;
   padding: 12px 10px 10px;
 }
@@ -378,7 +410,7 @@ button:disabled, .button-link.disabled {
 
 .trace-grid {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
@@ -388,12 +420,12 @@ button:disabled, .button-link.disabled {
 }
 
 .trace-chart {
-  border: 1px solid #ebe7db;
-  border-radius: 14px;
-  padding: 10px;
+  border: 1px solid #d9e2ea;
+  border-radius: 10px;
+  padding: 8px;
   background:
-    linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(15, 118, 110, 0.02)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 248, 249, 0.92));
+    linear-gradient(180deg, rgba(0, 102, 153, 0.08), rgba(0, 102, 153, 0.02)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 248, 251, 0.92));
 }
 
 .trace-chart svg {
@@ -479,12 +511,12 @@ button:disabled, .button-link.disabled {
 .field select,
 .field textarea {
   width: 100%;
-  border-radius: 12px;
-  border: 1px solid #c8d2d0;
-  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #c3cfdb;
+  padding: 8px 10px;
   font: inherit;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.98);
 }
 
 .field.checkbox-field input {
@@ -544,7 +576,7 @@ button:disabled, .button-link.disabled {
 
 .data-table th, .data-table td {
   padding: 8px;
-  border-top: 1px solid #ebe7db;
+  border-top: 1px solid #dde6ee;
   text-align: left;
   vertical-align: top;
 }
@@ -556,7 +588,7 @@ button:disabled, .button-link.disabled {
 }
 
 .accordion {
-  border-top: 1px dashed #d4d0c4;
+  border-top: 1px dashed #c9d4de;
   padding-top: 10px;
 }
 
@@ -570,9 +602,10 @@ details > summary {
 details > summary::-webkit-details-marker { display: none; }
 
 @media (max-width: 720px) {
-  main { padding: 20px 16px 36px; }
-  .shell-header { padding: 22px 16px 24px; }
-  .shell-header h1 { font-size: 1.7rem; }
+  .app-shell { grid-template-columns: 1fr; }
+  .shell-header { border-right: none; border-bottom: 1px solid var(--rail-border); }
+  .scenario-row, .nav-row, .badge-row { flex-direction: row; }
+  main { padding: 16px 14px 28px; }
   .results-filter-grid { grid-template-columns: 1fr; }
 }
 """
@@ -914,8 +947,12 @@ def render_layout(header: HeaderStatus, body: str) -> str:
     <style>{APP_CSS}</style>
   </head>
   <body>
-    {render_header(header)}
-    <main>{body}</main>
+    <div class="app-shell">
+      {render_header(header)}
+      <div class="shell-main">
+        <main>{body}</main>
+      </div>
+    </div>
     {APP_SHELL_SCRIPT}
   </body>
 </html>"""
@@ -939,18 +976,18 @@ def render_header(header: HeaderStatus) -> str:
         for item in header.navigation
     )
     badges = "".join(render_badge(badge) for badge in header.badges)
-    summary = f"<div>{escape(header.summary)}</div>" if header.summary else ""
-    scenario_row = f'<div class="scenario-row">{scenarios}</div>' if scenarios else ""
-    nav_row = f'<div class="nav-row">{navigation}</div>' if navigation else ""
-    badge_row = f'<div class="badge-row">{badges}</div>' if badges else ""
+    summary = f'<div class="small">{escape(header.summary)}</div>' if header.summary else ""
+    scenario_row = f'<div class="rail-block"><div class="rail-label">Scenario</div><div class="scenario-row">{scenarios}</div></div>' if scenarios else ""
+    nav_row = f'<div class="rail-block"><div class="rail-label">Navigation</div><div class="nav-row">{navigation}</div></div>' if navigation else ""
+    badge_row = f'<div class="rail-block"><div class="rail-label">Status</div><div class="badge-row">{badges}</div></div>' if badges else ""
     return f"""
-    <header class="shell-header">
+    <aside class="shell-header">
       <h1>{escape(header.title)}</h1>
       {summary}
       {scenario_row}
       {nav_row}
       {badge_row}
-    </header>"""
+    </aside>"""
 
 
 def render_badge(badge: StatusBadge) -> str:
@@ -1000,18 +1037,14 @@ def render_operate_page(page: OperatePageModel, scenario_id: str) -> str:
       <section class="hero">
         <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
-        <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {f'<p class="hero-subtitle">{escape(page.subtitle)}</p>' if page.subtitle else ""}
         {render_surface_action_row(page.workflow_actions, scenario_id)}
         <div class="metric-grid">{summary_metrics}</div>
         {render_page_state(page.state)}
       </section>
       {render_callouts(page.callouts)}
       {results_handoff}
-      <section class="panel">
-        <h3>Current Configuration</h3>
-        <p class="panel-subtitle">What the operator is preparing right now, before moving into focused Setup or Run workspaces.</p>
-        <div class="panel-grid">{configuration}</div>
-      </section>
+      <section class="panel"><h3>Current Configuration</h3><div class="panel-grid">{configuration}</div></section>
       {render_operate_panel(page.session_panel, scenario_id)}
       {render_operate_panel(page.laser_panel, scenario_id)}
       <section class="panel-grid">
@@ -1021,19 +1054,16 @@ def render_operate_page(page: OperatePageModel, scenario_id: str) -> str:
       {render_operate_panel(page.run_panel, scenario_id)}
       <section class="panel-grid">
         <div class="panel">
-          <h3>Hardware Visibility</h3>
-          <p class="panel-subtitle">Current subsystem posture without turning the UI into device consoles.</p>
+          <h3>Hardware</h3>
           {hardware}
         </div>
         <div class="panel">
-          <h3>Recent Activity</h3>
-          <p class="panel-subtitle">Authoritative events emitted by the latest run timeline.</p>
+          <h3>Recent Events</h3>
           {events}
         </div>
       </section>
       <section class="panel">
         <h3>Live Data</h3>
-        <p class="panel-subtitle">Run-time trace previews stay reviewable here while full persisted analysis remains downstream.</p>
         <div class="trace-grid">{live_data}</div>
       </section>
     </div>"""
@@ -1049,7 +1079,7 @@ def render_setup_page(page: SetupPageModel, scenario_id: str) -> str:
       <section class="hero">
         <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
-        <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {f'<p class="hero-subtitle">{escape(page.subtitle)}</p>' if page.subtitle else ""}
         {render_surface_action_row(page.workflow_actions, scenario_id)}
         <div class="metric-grid">{summary_metrics}</div>
         {render_page_state(page.state)}
@@ -1065,13 +1095,11 @@ def render_setup_page(page: SetupPageModel, scenario_id: str) -> str:
         {render_operate_panel(page.acquisition_panel, scenario_id)}
       </section>
       <section class="panel">
-        <h3>Readiness and Defaults</h3>
-        <p class="panel-subtitle">Compact review of recipe identity, calibration context, and current validation status.</p>
+        <h3>Readiness</h3>
         <div class="panel-grid">{readiness}</div>
       </section>
       <section class="panel">
-        <h3>Hardware Readiness</h3>
-        <p class="panel-subtitle">Subsystem posture stays visible before the run starts, without turning Setup into a device-console wall.</p>
+        <h3>Hardware</h3>
         {hardware}
       </section>
       {advanced}
@@ -1093,7 +1121,7 @@ def render_run_page(page: RunPageModel, scenario_id: str) -> str:
       <section class="hero">
         <div class="surface-badges">{"".join(render_badge(badge) for badge in page.surface_badges)}</div>
         <h2>{escape(page.title)}</h2>
-        <p class="hero-subtitle">{escape(page.subtitle)}</p>
+        {f'<p class="hero-subtitle">{escape(page.subtitle)}</p>' if page.subtitle else ""}
         {render_surface_action_row(page.workflow_actions, scenario_id)}
         <div class="metric-grid">{summary_metrics}</div>
         {render_page_state(page.state)}
@@ -1102,25 +1130,21 @@ def render_run_page(page: RunPageModel, scenario_id: str) -> str:
       {render_operate_panel(page.run_panel, scenario_id)}
       <section class="panel">
         <h3>Run Metadata</h3>
-        <p class="panel-subtitle">Session identity, timing context, acquisition posture, and handoff expectations for the current run.</p>
         <div class="panel-grid">{metadata}</div>
         {post_run_actions}
       </section>
       <section class="panel-grid">
         <div class="panel">
-          <h3>Hardware Health</h3>
-          <p class="panel-subtitle">Subsystem posture during or after the current run.</p>
+          <h3>Hardware</h3>
           {hardware}
         </div>
         <div class="panel">
-          <h3>Run Timeline</h3>
-          <p class="panel-subtitle">Events emitted by the authoritative run timeline.</p>
+          <h3>Timeline</h3>
           {events}
         </div>
       </section>
       <section class="panel">
-        <h3>Live Data Review</h3>
-        <p class="panel-subtitle">Meaningful live-state presentation from authoritative timeline samples, even when full plotting is not available.</p>
+        <h3>Live Data</h3>
         <div class="trace-grid">{live_data}</div>
       </section>
       {tables}
@@ -1571,11 +1595,12 @@ def render_advanced_section(section: AdvancedSectionModel) -> str:
     notes = "".join(f"<li>{escape(note)}</li>" for note in section.notes)
     notes_markup = f'<ul class="notes-list">{notes}</ul>' if notes else ""
     open_attr = " open" if section.open_by_default else ""
+    subtitle = f'<p class="panel-subtitle">{escape(section.subtitle)}</p>' if section.subtitle else ""
     return f"""
     <section class="panel">
       <details class="accordion"{open_attr}>
         <summary>{escape(section.title)}</summary>
-        <p class="panel-subtitle">{escape(section.subtitle)}</p>
+        {subtitle}
         <div class="panel-grid">{summaries}</div>
         {tables}
         {notes_markup}
@@ -1677,10 +1702,11 @@ def render_summary_panel(panel: SummaryPanel) -> str:
     rows = "".join(f'<div class="summary-row">{escape(item)}</div>' for item in panel.items) or (
         '<div class="summary-row placeholder-copy">No details available.</div>'
     )
+    subtitle = f'<p class="panel-subtitle">{escape(panel.subtitle)}</p>' if panel.subtitle else ""
     return f"""
     <div class="panel">
       <h4>{escape(panel.title)}</h4>
-      <p class="panel-subtitle">{escape(panel.subtitle)}</p>
+      {subtitle}
       {rows}
     </div>"""
 

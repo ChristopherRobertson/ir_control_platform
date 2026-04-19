@@ -91,13 +91,13 @@ def build_header_status(
         "service": "Service",
     }
     route_summaries = {
-        "experiment": "Default mission control for the supported operator workflow.",
-        "setup": "Prepare the recipe, hardware, and preflight state before starting.",
-        "run": "Monitor authoritative run state, live data, and post-run handoff.",
-        "results": "Review saved sessions, artifacts, visual outputs, and export readiness.",
-        "analyze": "Inspect persisted-session evaluation inputs without live-device dependencies.",
-        "advanced": "Review expert timing, routing, acquisition, and guarded defaults.",
-        "service": "Inspect diagnostics, calibration custody, and controlled recovery status.",
+        "experiment": "Operator workflow",
+        "setup": "Preparation",
+        "run": "Live run",
+        "results": "Saved sessions",
+        "analyze": "Saved analysis",
+        "advanced": "Expert tuning",
+        "service": "Diagnostics",
     }
     ready_devices = sum(1 for status in device_statuses if status.ready)
     connected_devices = sum(1 for status in device_statuses if status.connected)
@@ -115,25 +115,19 @@ def build_header_status(
         scenario_options=(),
         navigation=(),
         badges=(
-            StatusBadge(label=f"Route {route_titles.get(active_route, active_route.title())}", tone="info"),
-            StatusBadge(
-                label=f"Mode {experiment_type_label(draft.experiment_type)} / {draft.emission_mode.value.upper()}",
-                tone="neutral",
-            ),
-            StatusBadge(label=f"Scenario {scenario.label}", tone="neutral"),
+            StatusBadge(label=route_titles.get(active_route, active_route.title()), tone="info"),
             StatusBadge(label=f"Devices {ready_devices}/{len(device_statuses)} ready", tone=device_tone),
             StatusBadge(
-                label="Ready to Start" if ready_to_start else "Needs Attention",
+                label="Ready" if ready_to_start else "Attention",
                 tone="good" if ready_to_start else "warn",
             ),
             StatusBadge(
-                label=f"Issues {blocking_count} block / {warning_count} warn",
+                label=f"Issues {blocking_count}/{warning_count}",
                 tone="good" if blocking_count == 0 else "bad",
             ),
-            StatusBadge(label=f"Current Session {current_session_id}", tone="neutral"),
             StatusBadge(label=f"Run {run_phase_label}", tone=run_badge_tone(run_phase_label)),
         ),
-        summary=f"{route_summaries.get(active_route, '')} {scenario.description}".strip(),
+        summary=f"{route_summaries.get(active_route, '')} · {scenario.label}".strip(),
     )
 
 
@@ -154,7 +148,7 @@ def build_operate_page(
     current_session_id = draft_session_id or selected_session_id
     return OperatePageModel(
         title="Experiment",
-        subtitle="Operator mission control for the supported workflow. Use Setup and Run as focused views without leaving the canonical experiment path behind.",
+        subtitle="Session, laser, acquisition, and run control.",
         state=_operate_page_state(draft.experiment_type, preflight, latest_state),
         surface_badges=_surface_badges("experiment", draft),
         session_panel=_build_session_panel(draft, sessions, draft_session_id, selected_session_id),
@@ -195,7 +189,7 @@ def build_setup_page(
     current_session_id = draft_session_id or selected_session_id
     return SetupPageModel(
         title="Setup",
-        subtitle="Prepare the recipe, confirm readiness, and surface blocking issues before entering the focused Run workspace.",
+        subtitle="Recipe, hardware, and preflight.",
         state=_setup_page_state(draft.experiment_type, preflight, latest_state),
         surface_badges=_surface_badges("setup", draft),
         summary_metrics=_setup_summary_metrics(draft.experiment_type, preflight, current_session_id, device_cards),
@@ -226,7 +220,7 @@ def build_run_page(
     current_session_id = draft_session_id or (latest_state.session_id if latest_state is not None else selected_session_id)
     return RunPageModel(
         title="Run",
-        subtitle="Review authoritative run state, timeline events, live-trace previews, and the handoff into persisted-session results.",
+        subtitle="Run state, timeline, and live data.",
         state=_run_page_state(draft.experiment_type, preflight, latest_state),
         surface_badges=_surface_badges("run", draft),
         summary_metrics=_run_summary_metrics(
@@ -1327,39 +1321,32 @@ def _operator_issue_message(target: str) -> str:
 def _surface_badges(surface: str, draft: OperatorDraftState) -> tuple[StatusBadge, ...]:
     badge_map = {
         "experiment": (
-            StatusBadge(label="Default workflow", tone="good"),
-            StatusBadge(label="Mission control", tone="info"),
+            StatusBadge(label="Operator", tone="good"),
             StatusBadge(label=f"{experiment_type_label(draft.experiment_type)}", tone="neutral"),
         ),
         "setup": (
-            StatusBadge(label="Prepare and validate", tone="good"),
-            StatusBadge(label="Simple-first", tone="good"),
+            StatusBadge(label="Preflight", tone="good"),
             StatusBadge(label="Advanced on demand", tone="info"),
         ),
         "run": (
-            StatusBadge(label="Authoritative run state", tone="good"),
-            StatusBadge(label="Live data review", tone="good"),
+            StatusBadge(label="Live", tone="good"),
             StatusBadge(label="Results handoff", tone="info"),
         ),
         "advanced": (
             StatusBadge(label="Expert only", tone="warn"),
-            StatusBadge(label="Same canonical path", tone="good"),
-            StatusBadge(label="Progressive disclosure", tone="info"),
+            StatusBadge(label="Timing and routing", tone="info"),
         ),
         "results": (
-            StatusBadge(label="Persisted sessions", tone="good"),
-            StatusBadge(label="Visualization home", tone="good"),
-            StatusBadge(label="Human-readable provenance", tone="info"),
+            StatusBadge(label="Persisted", tone="good"),
+            StatusBadge(label="Artifacts", tone="info"),
         ),
         "analyze": (
-            StatusBadge(label="Persisted inputs only", tone="good"),
-            StatusBadge(label="Secondary surface", tone="warn"),
-            StatusBadge(label="Evaluation actions staged", tone="info"),
+            StatusBadge(label="Secondary", tone="warn"),
+            StatusBadge(label="Persisted inputs", tone="info"),
         ),
         "service": (
-            StatusBadge(label="Expert surface", tone="warn"),
-            StatusBadge(label="No vendor passthrough", tone="good"),
-            StatusBadge(label="Guarded recovery", tone="info"),
+            StatusBadge(label="Expert", tone="warn"),
+            StatusBadge(label="Recovery", tone="info"),
         ),
     }
     return badge_map[surface]
@@ -1450,13 +1437,8 @@ def _experiment_callouts(
 ) -> tuple[CalloutModel, ...]:
     callouts = [
         CalloutModel(
-            title="One canonical workflow",
-            body="Experiment remains the default mission-control surface even when Setup and Run are opened as focused workspaces.",
-            tone="good",
-        ),
-        CalloutModel(
-            title="Simulator context",
-            body=f"{scenario.label}: {scenario.description}",
+            title="Scenario",
+            body=scenario.label,
             tone="info",
         ),
     ]
@@ -1472,7 +1454,7 @@ def _experiment_callouts(
         callouts.append(
             CalloutModel(
                 title="Latest run completed",
-                body="The latest run completed on the canonical path and its saved session is ready for Results review.",
+                body="Results are ready for review.",
                 tone="good",
             )
         )
@@ -1487,8 +1469,8 @@ def _experiment_callouts(
     if not preflight.ready_to_start:
         callouts.append(
             CalloutModel(
-                title="Blocking issues remain explicit",
-                body="Experiment does not hide readiness failures. Clear the reported issues before starting.",
+                title="Blocking issues",
+                body="Clear before starting.",
                 tone="warn",
                 items=_operator_preflight_messages(preflight, blocking_only=True),
             )
@@ -1505,7 +1487,7 @@ def _experiment_configuration_panels(
     return (
         SummaryPanel(
             title="Current configuration",
-            subtitle="What the operator is about to run.",
+            subtitle="",
             items=(
                 f"Session name: {draft.session_label}",
                 f"Sample: {draft.sample_id}",
@@ -1520,7 +1502,7 @@ def _experiment_configuration_panels(
         ),
         SummaryPanel(
             title="Preflight focus",
-            subtitle="Why the current state is ready, warning, or blocked.",
+            subtitle="",
             items=(
                 f"Checks evaluated: {len(preflight.checks)}",
                 f"Blocking issues: {len(_operator_preflight_messages(preflight, blocking_only=True))}",
@@ -1614,8 +1596,8 @@ def _setup_callouts(
             tone="good",
         ),
         CalloutModel(
-            title="Scenario context",
-            body=f"{scenario.label}: {scenario.description}",
+            title="Scenario",
+            body=scenario.label,
             tone="info",
         ),
     ]
@@ -1623,7 +1605,7 @@ def _setup_callouts(
         callouts.append(
             CalloutModel(
                 title="Blocking issues",
-                body="Preflight is still stopping the canonical run path.",
+                body="Preflight is blocking start.",
                 tone="warn",
                 items=_operator_preflight_messages(preflight, blocking_only=True),
             )
@@ -1650,7 +1632,7 @@ def _setup_readiness_panels(
     return (
         SummaryPanel(
             title="Experiment selection",
-            subtitle="Compact review of the operator-facing recipe state.",
+            subtitle="",
             items=(
                 f"Current session: {current_session_id or 'not selected'}",
                 f"Recipe: {scenario.recipe.title}",
@@ -1661,7 +1643,7 @@ def _setup_readiness_panels(
         ),
         SummaryPanel(
             title="Preflight summary",
-            subtitle="Current validation outcome from the canonical control-plane preflight path.",
+            subtitle="",
             items=(
                 f"Ready to start: {'yes' if preflight.ready_to_start else 'no'}",
                 f"Checks evaluated: {len(preflight.checks)}",
@@ -1672,7 +1654,7 @@ def _setup_readiness_panels(
         ),
         SummaryPanel(
             title="Calibration and defaults",
-            subtitle="Guarded defaults remain visible without pretending they are routine operator edits.",
+            subtitle="",
             items=(
                 f"Calibration reference: {calibration.calibration_id if calibration else 'none'}",
                 f"Mapping id: {mapping.mapping_id if mapping else 'none'}",
@@ -1692,12 +1674,12 @@ def _setup_advanced_sections(
     return (
         AdvancedSectionModel(
             title="Timing and synchronization detail",
-            subtitle="Expert timing review stays available without dominating the normal setup path.",
+            subtitle="",
             summary_panels=(summary_panels[1], summary_panels[2], summary_panels[3]),
         ),
         AdvancedSectionModel(
             title="Acquisition and routing detail",
-            subtitle="HF2 profile, Pico secondary capture, and named routing stay grouped for experts.",
+            subtitle="",
             summary_panels=(summary_panels[0], summary_panels[4], summary_panels[5]),
         ),
     )
@@ -1781,21 +1763,16 @@ def _run_callouts(
             tone="good",
         ),
         CalloutModel(
-            title="Simulator lifecycle note",
-            body="This simulator records STARTING and RUNNING phases in the authoritative timeline, then completes synchronously. Abort is only available when an active run still exists.",
-            tone="info",
-        ),
-        CalloutModel(
-            title="Scenario context",
-            body=f"{scenario.label}: {scenario.description}",
+            title="Scenario",
+            body=scenario.label,
             tone="info",
         ),
     ]
     if latest_timeline is not None:
         callouts.append(
             CalloutModel(
-                title="Latest run timeline captured",
-                body=f"{len(latest_timeline.events)} events and {len(latest_timeline.live_data_points)} live samples are available for review.",
+                title="Timeline captured",
+                body=f"{len(latest_timeline.events)} events · {len(latest_timeline.live_data_points)} samples",
                 tone="good",
             )
         )

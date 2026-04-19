@@ -26,9 +26,8 @@ class FinishedExperimentShellModelTests(unittest.TestCase):
         header = asyncio.run(runtime.get_header_status("experiment"))
 
         badge_labels = tuple(badge.label for badge in header.badges)
-        self.assertGreaterEqual(len(badge_labels), 7)
-        self.assertIn("Route Experiment", badge_labels)
-        self.assertIn("Scenario Nominal", badge_labels)
+        self.assertGreaterEqual(len(badge_labels), 4)
+        self.assertIn("Experiment", badge_labels)
         self.assertTrue(any(label.startswith("Devices ") for label in badge_labels))
         self.assertTrue(any(label.startswith("Issues ") for label in badge_labels))
 
@@ -38,7 +37,7 @@ class FinishedExperimentShellModelTests(unittest.TestCase):
         page = asyncio.run(runtime.get_operate_page())
 
         self.assertEqual(page.title, "Experiment")
-        self.assertGreaterEqual(len(page.surface_badges), 3)
+        self.assertGreaterEqual(len(page.surface_badges), 2)
         self.assertGreaterEqual(len(page.summary_metrics), 4)
         self.assertGreaterEqual(len(page.configuration_panels), 2)
         self.assertGreaterEqual(len(page.hardware_cards), 6)

@@ -85,8 +85,8 @@ class FinishedUiShellTests(unittest.TestCase):
             self.assertIn(label, text)
         for scenario_label in ("nominal", "blocked timing", "faulted hf2", "pico optional"):
             self.assertIn(scenario_label, text)
-        self.assertIn("route setup", text)
-        self.assertIn("scenario blocked timing", text)
+        self.assertIn("status setup", text)
+        self.assertIn("preparation · blocked timing", text)
 
     def test_experiment_route_renders_finished_mission_control(self) -> None:
         app = self._create_app()
@@ -104,8 +104,8 @@ class FinishedUiShellTests(unittest.TestCase):
         for marker in (
             "experiment",
             "current configuration",
-            "hardware visibility",
-            "recent activity",
+            "hardware",
+            "recent events",
             "live data",
             "open setup workspace",
             "open run workspace",
@@ -124,8 +124,8 @@ class FinishedUiShellTests(unittest.TestCase):
         for marker in (
             "setup",
             "preflight / validation",
-            "readiness and defaults",
-            "hardware readiness",
+            "readiness",
+            "hardware",
             "timing and synchronization detail",
             "acquisition and routing detail",
             "run preflight",
@@ -151,9 +151,9 @@ class FinishedUiShellTests(unittest.TestCase):
         for marker in (
             "run completed",
             "run metadata",
-            "hardware health",
-            "run timeline",
-            "live data review",
+            "hardware",
+            "timeline",
+            "live data",
             "open results",
             "latest run timeline",
             "lifecycle coverage",

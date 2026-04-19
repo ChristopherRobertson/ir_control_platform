@@ -22,7 +22,7 @@ STARTUP_TIMEOUT_SECONDS = 12.0
 EXPERIMENT_MARKERS = (
     "Experiment",
     "Current Configuration",
-    "Hardware Visibility",
+    "Hardware",
     "Live Data",
     "Open Setup Workspace",
     "Open Run Workspace",
@@ -31,16 +31,16 @@ EXPERIMENT_MARKERS = (
 SETUP_MARKERS = (
     "Setup",
     "Preflight / Validation",
-    "Readiness and Defaults",
-    "Hardware Readiness",
+    "Readiness",
+    "Hardware",
     "Timing and synchronization detail",
 )
 
 RUN_MARKERS = (
     "Run completed",
     "Run Metadata",
-    "Run Timeline",
-    "Live Data Review",
+    "Timeline",
+    "Live Data",
     "Open Results",
 )
 
