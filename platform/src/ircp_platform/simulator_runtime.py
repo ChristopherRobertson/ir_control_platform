@@ -1,622 +1,766 @@
-"""Simulator-backed UI runtime gateway implementation."""
+"""Simulator-backed UI runtime for the generic single-wavelength v1 workflow."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
-import shutil
 
 from ircp_contracts import (
-    DeviceConfiguration,
-    DeviceStatus,
-    ExperimentRecipe,
-    MircatEmissionMode,
-    PreflightReport,
-    RunFailureReason,
-    RunPhase,
-    RunState,
-    SessionManifest,
+    EXPERIMENT_ID,
+    EXPERIMENT_NAME,
+    LockInSettings,
+    PlotDisplayMode,
+    PlotMetricFamily,
+    ProbeEmissionMode,
+    ProbeSettings,
+    PumpSettings,
+    RunHeader,
+    RunLifecycleState,
+    SessionRecord,
+    SetupState,
+    SingleWavelengthPumpProbeRecipe,
+    TimescaleRegime,
+    validate_run_header_fields,
+    validate_session_fields,
 )
-from ircp_data_pipeline import SessionCatalog, SessionOpenRequest, SessionReplayer, SessionStore
-from ircp_experiment_engine import SupportedV1DriverBundle
-from ircp_experiment_engine.runtime import InMemoryRunCoordinator, SupportedV1PreflightValidator
+from ircp_data_pipeline import SingleWavelengthRunStore
+from ircp_experiment_engine import SingleWavelengthPumpProbeCoordinator
+from ircp_processing import build_processed_run_record, select_plot_series
+from ircp_reports import metadata_export_bytes, processed_export_bytes, raw_export_bytes
 from ircp_simulators import SimulatorScenarioContext
 from ircp_ui_shell import (
-    AnalyzePageModel,
-    AdvancedPageModel,
-    DeviceSummaryCard,
+    ActionButtonModel,
+    FormFieldModel,
+    FormOptionModel,
     HeaderStatus,
-    OperatePageModel,
+    NavigationItem,
+    PanelModel,
+    PlotPoint,
     ResultsDownload,
     ResultsPageModel,
-    ServicePageModel,
+    ResultsPlotModel,
+    RunListItem,
+    SessionListItem,
+    SessionPageModel,
+    SetupPageModel,
+    StatusBadge,
+    StatusItemModel,
     UiRuntimeGateway,
 )
-
-from .operator_state import (
-    ExperimentType,
-    FIXED_WAVELENGTH_EXPERIMENT_TYPE,
-    OperatorDraftState,
-    WAVELENGTH_SCAN_EXPERIMENT_TYPE,
-    apply_manifest_to_draft,
-    build_mircat_configuration,
-    build_recipe,
-    build_session_notes,
-    create_operator_draft,
-    normalize_hf2_dio_selection,
-    normalize_ndyag_repetition_rate_hz,
-    normalize_ndyag_shot_count,
-    normalize_experiment_type,
-    normalize_pulse_parameters,
-    normalize_scan_speed,
-    normalize_wavenumber_cm1,
-)
-from .page_builders import (
-    build_advanced_page,
-    build_analyze_page,
-    build_header_status,
-    build_operate_page,
-    build_results_page,
-    build_service_page,
-    device_card_from_status,
-)
-from .runtime_helpers import json_bytes, json_lines_bytes
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _results_session_matches(summary, *, search: str, status_filter: str) -> bool:
-    if status_filter != "all" and summary.status.value != status_filter:
-        return False
-    normalized_search = search.strip().casefold()
-    if not normalized_search:
-        return True
-    return normalized_search in summary.session_id.casefold() or normalized_search in summary.recipe_title.casefold()
-
-
-def _results_sort_key(summary, sort_order: str) -> tuple[object, ...]:
-    total_artifacts = (
-        summary.primary_raw_artifact_count
-        + summary.secondary_monitor_artifact_count
-        + summary.processed_artifact_count
-        + summary.analysis_artifact_count
-        + summary.export_artifact_count
-    )
-    if sort_order == "updated_asc":
-        return (summary.updated_at, summary.created_at, summary.session_id)
-    if sort_order == "artifacts_desc":
-        return (-total_artifacts, -summary.updated_at.timestamp(), summary.session_id)
-    return (-summary.updated_at.timestamp(), -summary.created_at.timestamp(), summary.session_id)
+from ircp_ui_shell.page_state import blocked_state, empty_state, fault_state, success_state, warning_state
 
 
 class SimulatorUiRuntime(UiRuntimeGateway):
-    """UI-facing adapter layer backed by deterministic supported-v1 simulators."""
+    """Thin UI adapter over data-pipeline persistence and engine orchestration."""
 
     def __init__(
         self,
         *,
         scenario: SimulatorScenarioContext,
-        coordinator: InMemoryRunCoordinator,
-        session_store: SessionStore,
-        session_catalog: SessionCatalog,
-        session_replayer: SessionReplayer,
         storage_root: Path,
     ) -> None:
         self._scenario = scenario
-        self._coordinator = coordinator
-        self._session_store = session_store
-        self._session_catalog = session_catalog
-        self._session_replayer = session_replayer
-        self._preflight_validator = SupportedV1PreflightValidator()
-        self._storage_root = storage_root.resolve()
-        self._last_preflight: PreflightReport | None = None
-        self._draft = create_operator_draft(scenario)
-        self._active_run_id: str | None = None
-        self._draft_session_id: str | None = None
-        self._selected_session_id: str | None = None
-        self._preflight_dirty = True
-        if scenario.initial_manifests:
-            latest_manifest = max(scenario.initial_manifests, key=lambda manifest: manifest.updated_at)
-            self._selected_session_id = latest_manifest.session_id
-            apply_manifest_to_draft(self._draft, latest_manifest, scenario)
+        self._store = SingleWavelengthRunStore(storage_root)
+        self._coordinator = SingleWavelengthPumpProbeCoordinator(
+            self._store,
+            fault_on_start=scenario.fault_on_start,
+        )
+        self._recipe = SingleWavelengthPumpProbeRecipe()
+        self._session: SessionRecord | None = None
+        self._run_header: RunHeader | None = None
+        self._saved_pump: PumpSettings | None = scenario.default_pump
+        self._saved_timescale: TimescaleRegime | None = scenario.default_timescale
+        self._saved_probe: ProbeSettings | None = scenario.default_probe
+        self._saved_lockin: LockInSettings | None = scenario.default_lockin
+        self._pump: PumpSettings | None = scenario.default_pump
+        self._timescale: TimescaleRegime | None = scenario.default_timescale
+        self._probe: ProbeSettings | None = scenario.default_probe
+        self._lockin: LockInSettings | None = scenario.default_lockin
+        self._setup_saved = False
+        self._probe_connected = scenario.default_probe.ready
+        self._lockin_connected = scenario.default_lockin.ready
+        self._session_form_draft: dict[str, str] | None = None
+        self._pending_session_overwrite: dict[str, str] | None = None
+        self._session_conflict_name: str | None = None
 
     async def get_header_status(self, active_route: str) -> HeaderStatus:
-        preflight = await self._ensure_preflight()
-        run_phase_label = await self._current_run_phase_label()
-        current_session_id = self._draft_session_id or self._selected_session_id or "none"
-        ready_to_start = preflight.ready_to_start and self._start_experiment_supported()
-        return build_header_status(
+        setup = self._setup_state()
+        return HeaderStatus(
+            title="IR Control Platform",
             active_route=active_route,
-            draft=self._draft,
-            current_session_id=current_session_id,
-            run_phase_label=run_phase_label,
-            ready_to_start=ready_to_start,
+            navigation=(
+                NavigationItem("Session", "/session", active=active_route == "session"),
+                NavigationItem(
+                    "Setup",
+                    "/setup",
+                    active=active_route == "setup",
+                    disabled=not (setup.session_saved and setup.run_header_saved),
+                ),
+                NavigationItem("Results", "/results", active=active_route == "results"),
+            ),
+            badges=(
+                StatusBadge(EXPERIMENT_NAME, "info"),
+                StatusBadge("Session saved" if setup.session_saved else "Session needed", "good" if setup.session_saved else "warn"),
+                StatusBadge("Run settings saved" if setup.run_header_saved else "Run settings needed", "good" if setup.run_header_saved else "warn"),
+                StatusBadge("Ready to run" if setup.can_run else "Setup blocked", "good" if setup.can_run else "warn"),
+            ),
+            summary=f"{self._scenario.label} simulator",
         )
 
-    async def get_operate_page(self) -> OperatePageModel:
-        preflight = await self._ensure_preflight()
-        latest_state = await self._latest_run_state()
-        sessions = await self._session_catalog.list_sessions()
-        laser_status = await self._scenario.bundle.mircat.get_status()
-        hf2_status = await self._scenario.bundle.hf2li.get_status()
-        return build_operate_page(
-            draft=self._draft,
-            preflight=preflight,
-            latest_state=latest_state,
-            sessions=sessions,
-            laser_status=laser_status,
-            hf2_status=hf2_status,
-            draft_session_id=self._draft_session_id,
-            selected_session_id=self._selected_session_id,
+    async def get_session_page(self) -> SessionPageModel:
+        session_state = None
+        if self._pending_session_overwrite is not None:
+            session_state = warning_state(
+                "Session already exists",
+                "A saved session with this Name / ID already exists. Overwrite it or cancel to choose another value.",
+            )
+        elif self._session_conflict_name is not None:
+            session_state = warning_state(
+                "Session ID conflict",
+                "Choose a different Name / ID or overwrite the saved session.",
+            )
+        elif self._session is None:
+            session_state = blocked_state(
+                "Session metadata required",
+                "Save the session and run settings before setup is available.",
+            )
+        elif self._run_header is None or not self._run_header.saved:
+            session_state = warning_state(
+                "Run settings required",
+                "Save run settings before moving to setup.",
+            )
+        else:
+            session_state = success_state(
+                "Session and run settings saved",
+                "Setup can now use editable session metadata while the run snapshot remains frozen at Run.",
+            )
+        sessions = tuple(
+            SessionListItem(
+                session_id=session.session_id,
+                label=session.session_name,
+                updated_at=session.updated_at,
+                open_enabled=True,
+            )
+            for session in self._store.list_sessions()
+        )
+        runs = self._run_history()
+        return SessionPageModel(
+            title="Session",
+            subtitle="Define the experimental context and draft run metadata before setup.",
+            state=session_state,
+            session_panel=self._session_panel(),
+            run_header_panel=self._run_header_panel(),
+            existing_sessions=sessions,
+            existing_runs=runs,
         )
 
-    async def get_advanced_page(self) -> AdvancedPageModel:
-        preflight = await self._ensure_preflight()
-        return build_advanced_page(
-            draft=self._draft,
-            scenario=self._scenario,
-            preflight=preflight,
+    async def get_setup_page(self) -> SetupPageModel:
+        setup = self._setup_state()
+        return SetupPageModel(
+            title="Setup",
+            subtitle="Configure pump, timescale, probe, lock-in overrides, and run controls on one page.",
+            state=None,
+            save_action=ActionButtonModel("Save", "/setup/save", disabled=not (setup.session_saved and setup.run_header_saved)),
+            pump_panel=self._pump_panel(setup),
+            timescale_panel=self._timescale_panel(setup),
+            probe_panel=self._probe_panel(setup),
+            lockin_panel=self._lockin_panel(setup),
+            run_controls_panel=self._run_controls_panel(setup),
         )
 
     async def get_results_page(
         self,
-        selected_session_id: str | None = None,
         *,
-        search: str = "",
-        status_filter: str = "all",
-        sort_order: str = "updated_desc",
+        session_id: str | None = None,
+        run_id: str | None = None,
+        metric_family: str = "R",
+        display_mode: str = "overlay",
     ) -> ResultsPageModel:
-        sessions = await self._session_catalog.list_sessions()
-        filtered_sessions = tuple(
-            sorted(
-                (
-                    summary
-                    for summary in sessions
-                    if _results_session_matches(summary, search=search, status_filter=status_filter)
+        selected = self._resolve_results_selection(session_id, run_id)
+        run_history = self._run_history()
+        if selected is None:
+            return ResultsPageModel(
+                title="Results",
+                subtitle="Review processed data from saved runs without live hardware.",
+                state=empty_state("No completed run selected", "Complete a run or select a saved run for review."),
+                selected_session_id=None,
+                selected_run_id=None,
+                selector_panel=self._results_selector_panel(metric_family, display_mode),
+                metadata_panel=PanelModel("Run metadata"),
+                plot=None,
+                export_panel=PanelModel("Export"),
+                run_history=run_history,
+            )
+        session, run = selected
+        metric = PlotMetricFamily(metric_family)
+        mode = PlotDisplayMode(display_mode)
+        raw = self._store.load_raw_run_record(session.session_id, run.run_id)
+        processed = build_processed_run_record(raw, metric)
+        points = tuple(
+            PlotPoint(
+                time_seconds=item["time_seconds"],
+                sample=item.get("sample"),
+                reference=item.get("reference"),
+                ratio=item.get("ratio"),
+            )
+            for item in select_plot_series(processed, mode)
+        )
+        state = None
+        if run.completion_status == RunLifecycleState.FAULTED:
+            state = fault_state("Run faulted", run.fault_error_state or "The run faulted.")
+        elif run.completion_status != RunLifecycleState.COMPLETED:
+            state = warning_state("Run incomplete", f"Run status is {run.completion_status.value}.")
+        return ResultsPageModel(
+            title="Results",
+            subtitle="Choose metric family and display mode from persisted run data.",
+            state=state,
+            selected_session_id=session.session_id,
+            selected_run_id=run.run_id,
+            selector_panel=self._results_selector_panel(metric.value, mode.value, session.session_id, run.run_id),
+            metadata_panel=PanelModel(
+                "Run metadata / settings snapshot",
+                status_items=(
+                    StatusItemModel("Session", session.session_id),
+                    StatusItemModel("Run", run.run_id),
+                    StatusItemModel("Status", run.completion_status.value),
+                    StatusItemModel("Timescale", run.settings_snapshot.timescale.value if run.settings_snapshot else "none"),
+                    StatusItemModel("Wavelength", f"{run.settings_snapshot.probe.wavelength_cm1:.2f} cm^-1" if run.settings_snapshot else "none"),
                 ),
-                key=lambda summary: _results_sort_key(summary, sort_order),
-            )
-        )
-        all_session_ids = {summary.session_id for summary in sessions}
-        visible_session_ids = {summary.session_id for summary in filtered_sessions}
-        selection_cleared = selected_session_id == "__none__"
-        invalid_selected_session_id: str | None = None
-        selection_hidden_by_filter = False
-        selected_id: str | None = None
-
-        if selection_cleared:
-            selected_id = None
-        elif selected_session_id is not None:
-            if selected_session_id in visible_session_ids:
-                selected_id = selected_session_id
-            elif selected_session_id in all_session_ids:
-                selection_hidden_by_filter = True
-            else:
-                invalid_selected_session_id = selected_session_id
-        elif self._selected_session_id in visible_session_ids:
-            selected_id = self._selected_session_id
-        elif filtered_sessions:
-            selected_id = filtered_sessions[0].session_id
-
-        if selected_id is not None:
-            self._selected_session_id = selected_id
-        detail = (
-            await self._session_catalog.get_session_detail(selected_id)
-            if selected_id is not None and selected_id in visible_session_ids
-            else None
-        )
-        return build_results_page(
-            draft=self._draft,
-            storage_root=self._storage_root,
-            sessions=filtered_sessions,
-            total_session_count=len(sessions),
-            selected_session_id=selected_id,
-            detail=detail,
-            search_value=search.strip(),
-            status_filter=status_filter,
-            sort_order=sort_order,
-            invalid_selected_session_id=invalid_selected_session_id,
-            selection_hidden_by_filter=selection_hidden_by_filter,
-            selection_cleared=selection_cleared,
+            ),
+            plot=ResultsPlotModel(metric_family=metric.value, display_mode=mode.value, points=points),
+            export_panel=self._export_panel(session.session_id, run.run_id),
+            run_history=run_history,
         )
 
-    async def get_results_download(
-        self,
-        session_id: str,
-        *,
-        asset: str | None = None,
-        artifact_id: str | None = None,
-    ) -> ResultsDownload:
-        detail = await self._session_catalog.get_session_detail(session_id)
-        if artifact_id is not None:
-            artifact = next(
-                (
-                    candidate
-                    for candidate in (
-                        *detail.primary_raw_artifacts,
-                        *detail.secondary_monitor_artifacts,
-                        *detail.processed_artifacts,
-                        *detail.analysis_artifacts,
-                        *detail.export_artifacts,
-                    )
-                    if candidate.artifact_id == artifact_id
-                ),
-                None,
-            )
-            if artifact is None:
-                raise KeyError(f"Unknown artifact id for session {session_id}: {artifact_id}")
-            payload_path = self._resolve_results_path(artifact.relative_path)
-            if not payload_path.is_file():
-                raise FileNotFoundError(
-                    f"Artifact payload is not available for download: {artifact.relative_path}"
-                )
-            return ResultsDownload(
-                filename=payload_path.name,
-                content_type=artifact.content_type or "application/octet-stream",
-                body=payload_path.read_bytes(),
-            )
-
-        asset_name = asset or "manifest"
-        if asset_name == "manifest":
-            return ResultsDownload(
-                filename=f"{session_id}-manifest.json",
-                content_type="application/json; charset=utf-8",
-                body=json_bytes(detail.manifest),
-            )
-        if asset_name == "events":
-            return ResultsDownload(
-                filename=f"{session_id}-events.ndjson",
-                content_type="application/x-ndjson; charset=utf-8",
-                body=json_lines_bytes(detail.event_timeline),
-            )
-        raise ValueError(f"Unknown results download asset: {asset_name}")
-
-    async def get_analyze_page(self, selected_session_id: str | None = None) -> AnalyzePageModel:
-        sessions = await self._session_catalog.list_sessions()
-        selected_id = selected_session_id or self._selected_session_id or (sessions[0].session_id if sessions else None)
-        if selected_id is not None:
-            self._selected_session_id = selected_id
-        detail = await self._session_catalog.get_session_detail(selected_id) if selected_id is not None else None
-        return build_analyze_page(
-            draft=self._draft,
-            sessions=sessions,
-            selected_session_id=selected_id,
-            detail=detail,
+    async def get_results_download(self, *, session_id: str, run_id: str, asset: str) -> ResultsDownload:
+        session = self._store.load_session(session_id)
+        run = self._store.load_run_record(session_id, run_id)
+        if run.settings_snapshot is None or run.raw_record_id is None:
+            raise ValueError("Selected run does not have persisted acquisition data.")
+        raw = self._store.load_raw_run_record(session_id, run_id)
+        if asset == "raw":
+            return ResultsDownload(f"{run_id}-raw.csv", "text/csv; charset=utf-8", raw_export_bytes(raw))
+        if asset == "processed":
+            processed = self._store.load_processed_run_record(session_id, run_id)
+            return ResultsDownload(f"{run_id}-processed.json", "application/json; charset=utf-8", processed_export_bytes(processed))
+        manifest = self._store.load_artifact_manifest(session_id, run_id)
+        return ResultsDownload(
+            f"{run_id}-metadata.json",
+            "application/json; charset=utf-8",
+            metadata_export_bytes(
+                session=session,
+                run=run,
+                settings_snapshot=run.settings_snapshot,
+                artifact_manifest=manifest,
+            ),
         )
-
-    async def get_service_page(self) -> ServicePageModel:
-        sessions = await self._session_catalog.list_sessions()
-        return build_service_page(
-            draft=self._draft,
-            storage_root=self._storage_root,
-            session_count=len(sessions),
-            device_cards=await self._device_cards(),
-        )
-
-    async def set_experiment_type(self, experiment_type: str) -> ExperimentType:
-        normalized = normalize_experiment_type(experiment_type)
-        if normalized == self._draft.experiment_type:
-            return normalized
-        self._draft.experiment_type = normalized
-        self._mark_preflight_dirty()
-        return normalized
-
-    async def configure_operating_mode(
-        self,
-        *,
-        experiment_type: str,
-        emission_mode: str,
-        tune_target_cm1: float | None = None,
-        scan_start_cm1: float | None = None,
-        scan_stop_cm1: float | None = None,
-        scan_step_size_cm1: float | None = None,
-        scan_dwell_time_ms: float | None = None,
-        pulse_repetition_rate_hz: float | None = None,
-        pulse_width_ns: float | None = None,
-        pulse_duty_cycle_percent: float | None = None,
-    ) -> None:
-        self._draft.experiment_type = normalize_experiment_type(experiment_type)
-        self._draft.emission_mode = (
-            MircatEmissionMode.PULSED if emission_mode == MircatEmissionMode.PULSED.value else MircatEmissionMode.CW
-        )
-        if tune_target_cm1 is not None:
-            self._draft.tune_target_cm1 = normalize_wavenumber_cm1(tune_target_cm1)
-        if scan_start_cm1 is not None:
-            self._draft.scan_start_cm1 = normalize_wavenumber_cm1(scan_start_cm1)
-        if scan_stop_cm1 is not None:
-            self._draft.scan_stop_cm1 = normalize_wavenumber_cm1(scan_stop_cm1)
-        if scan_step_size_cm1 is not None:
-            self._draft.scan_step_size_cm1 = normalize_scan_speed(scan_step_size_cm1)
-        if scan_dwell_time_ms is not None:
-            self._draft.scan_dwell_time_ms = scan_dwell_time_ms
-        if pulse_repetition_rate_hz is not None:
-            self._draft.pulse_repetition_rate_hz = pulse_repetition_rate_hz
-        if pulse_width_ns is not None:
-            self._draft.pulse_width_ns = pulse_width_ns
-        (
-            self._draft.pulse_repetition_rate_hz,
-            self._draft.pulse_width_ns,
-            self._draft.pulse_duty_cycle_percent,
-        ) = normalize_pulse_parameters(
-            self._draft.pulse_repetition_rate_hz,
-            self._draft.pulse_width_ns,
-        )
-        self._mark_preflight_dirty()
-
-    async def configure_hf2(
-        self,
-        *,
-        sample_rate_hz: float | None = None,
-        harmonic: int | None = None,
-        time_constant_seconds: float | None = None,
-        extref: str | None = None,
-        trigger: str | None = None,
-    ) -> None:
-        if sample_rate_hz is not None:
-            self._draft.hf2_sample_rate_hz = sample_rate_hz
-        if harmonic is not None:
-            self._draft.hf2_harmonic = harmonic
-        if time_constant_seconds is not None:
-            self._draft.hf2_time_constant_seconds = time_constant_seconds
-        if extref is not None:
-            self._draft.hf2_extref = normalize_hf2_dio_selection(extref)
-        if trigger is not None:
-            self._draft.hf2_trigger = normalize_hf2_dio_selection(trigger)
-        self._mark_preflight_dirty()
-
-    async def configure_ndyag(
-        self,
-        *,
-        repetition_rate_hz: float | None = None,
-        shot_count: int | None = None,
-        continuous: bool,
-    ) -> None:
-        if repetition_rate_hz is not None:
-            self._draft.ndyag_repetition_rate_hz = normalize_ndyag_repetition_rate_hz(repetition_rate_hz)
-        if continuous:
-            self._draft.ndyag_shot_count = 1
-        elif shot_count is not None:
-            self._draft.ndyag_shot_count = normalize_ndyag_shot_count(shot_count)
-        self._draft.ndyag_continuous = continuous
-        self._mark_preflight_dirty()
-
-    async def set_ndyag_enabled(self, enabled: bool) -> None:
-        self._draft.ndyag_enabled = enabled
-        if enabled and self._draft.ndyag_continuous:
-            self._draft.ndyag_shot_count = 1
-        self._mark_preflight_dirty()
 
     async def save_session(
         self,
-        session_id: str,
-        session_label: str,
+        *,
+        session_name: str,
+        operator: str,
         sample_id: str,
-        operator_notes: str,
-    ) -> SessionManifest:
-        session_id_value = session_id.strip()
-        session_label_value = session_label.strip()
-        sample_id_value = sample_id.strip()
-        if session_id_value:
-            self._draft.session_id_input = session_id_value
-        if session_label_value:
-            self._draft.session_label = session_label_value
-        if sample_id_value:
-            self._draft.sample_id = sample_id_value
-        self._draft.operator_notes = operator_notes.strip()
-        manifest = await self._coordinator.create_session(
-            self._current_recipe(),
-            self._scenario.preset,
-            session_id=self._draft.session_id_input,
-            notes=build_session_notes(self._draft, self._scenario),
-        )
-        self._draft.session_id_input = manifest.session_id
-        self._draft_session_id = manifest.session_id
-        self._selected_session_id = manifest.session_id
-        self._mark_preflight_dirty()
-        return manifest
-
-    async def delete_saved_session(self, session_id: str) -> None:
-        await self._session_store.delete_session(session_id)
-        session_dir = self._storage_root / "sessions" / session_id
-        if session_dir.exists():
-            shutil.rmtree(session_dir)
-        if self._draft_session_id == session_id:
-            self._draft_session_id = None
-        if self._selected_session_id == session_id:
-            sessions = await self._session_catalog.list_sessions()
-            self._selected_session_id = sessions[0].session_id if sessions else None
-        self._mark_preflight_dirty()
-
-    async def open_saved_session(self, session_id: str) -> SessionManifest:
-        result = await self._session_replayer.open_session(
-            SessionOpenRequest(
+        sample_notes: str,
+        experiment_notes: str,
+    ) -> str:
+        issues = validate_session_fields(session_name=session_name, operator=operator, sample_id=sample_id)
+        if issues:
+            raise ValueError("; ".join(issue.message for issue in issues))
+        form_values = {
+            "session_name": session_name,
+            "operator": operator,
+            "sample_id": sample_id,
+            "sample_notes": sample_notes,
+            "experiment_notes": experiment_notes,
+        }
+        self._session_form_draft = dict(form_values)
+        if self._session is None:
+            session_id = session_name.strip()
+            if self._store.session_exists(session_id):
+                self._pending_session_overwrite = dict(form_values)
+                self._session_conflict_name = session_id
+                return "overwrite_pending"
+            self._session = self._store.create_session(
                 session_id=session_id,
-                requested_at=_utc_now(),
-                reopen_for_replay=True,
+                experiment_type=EXPERIMENT_ID,
+                session_name=session_name,
+                operator=operator,
+                sample_id=sample_id,
+                sample_notes=sample_notes,
+                experiment_notes=experiment_notes,
+            )
+        else:
+            self._session = self._store.save_session(
+                SessionRecord(
+                    session_id=self._session.session_id,
+                    experiment_type=EXPERIMENT_ID,
+                    session_name=session_name,
+                    operator=operator,
+                    sample_id=sample_id,
+                    sample_notes=sample_notes,
+                    experiment_notes=experiment_notes,
+                    created_at=self._session.created_at,
+                    updated_at=self._session.updated_at,
+                )
+            )
+        self._session_form_draft = None
+        self._pending_session_overwrite = None
+        self._session_conflict_name = None
+        return self._session.session_id
+
+    async def confirm_session_overwrite(self) -> str:
+        if self._pending_session_overwrite is None:
+            raise ValueError("No session overwrite is pending.")
+        session_id = self._pending_session_overwrite["session_name"].strip()
+        existing = self._store.load_session(session_id)
+        self._session = self._store.save_session(
+            SessionRecord(
+                session_id=existing.session_id,
+                experiment_type=EXPERIMENT_ID,
+                session_name=self._pending_session_overwrite["session_name"],
+                operator=self._pending_session_overwrite["operator"],
+                sample_id=self._pending_session_overwrite["sample_id"],
+                sample_notes=self._pending_session_overwrite["sample_notes"],
+                experiment_notes=self._pending_session_overwrite["experiment_notes"],
+                created_at=existing.created_at,
+                updated_at=existing.updated_at,
             )
         )
-        self._selected_session_id = result.manifest.session_id
-        self._draft_session_id = None
-        apply_manifest_to_draft(self._draft, result.manifest, self._scenario)
-        return result.manifest
+        self._session_form_draft = None
+        self._pending_session_overwrite = None
+        self._session_conflict_name = None
+        return self._session.session_id
 
-    async def connect_laser(self) -> DeviceStatus:
-        status = await self._scenario.bundle.mircat.connect()
-        self._mark_preflight_dirty()
-        return status
+    async def cancel_session_overwrite(self) -> None:
+        if self._pending_session_overwrite is not None:
+            self._session_form_draft = dict(self._pending_session_overwrite)
+            self._session_conflict_name = self._pending_session_overwrite["session_name"].strip()
+        self._pending_session_overwrite = None
 
-    async def disconnect_laser(self) -> DeviceStatus:
-        status = await self._scenario.bundle.mircat.disconnect()
-        self._mark_preflight_dirty()
-        return status
+    async def open_session(self, *, session_id: str) -> str:
+        self._session = self._store.load_session(session_id)
+        self._run_header = None
+        self._session_form_draft = None
+        self._pending_session_overwrite = None
+        self._session_conflict_name = None
+        return self._session.session_id
 
-    async def arm_laser(self) -> DeviceStatus:
-        status = await self._scenario.bundle.mircat.arm()
-        self._mark_preflight_dirty()
-        return status
+    async def open_run(self, *, session_id: str, run_id: str) -> str:
+        if self._session is None or self._session.session_id != session_id:
+            raise ValueError("Open the session before opening one of its runs.")
+        self._run_header = self._store.load_run_header(session_id, run_id)
+        return self._run_header.run_id
 
-    async def disarm_laser(self) -> DeviceStatus:
-        status = await self._scenario.bundle.mircat.disarm()
-        self._mark_preflight_dirty()
-        return status
-
-    async def set_laser_emission(self, enabled: bool) -> DeviceStatus:
-        status = await self._scenario.bundle.mircat.set_emission_enabled(enabled)
-        self._mark_preflight_dirty()
-        return status
-
-    async def tune_laser(self, target_wavenumber_cm1: float) -> DeviceConfiguration:
-        self._draft.experiment_type = FIXED_WAVELENGTH_EXPERIMENT_TYPE
-        self._draft.tune_target_cm1 = normalize_wavenumber_cm1(target_wavenumber_cm1)
-        snapshot = await self._scenario.bundle.mircat.apply_configuration(
-            build_mircat_configuration(self._draft, self._scenario)
+    async def create_run(self, *, run_name: str, run_notes: str) -> str:
+        if self._session is None:
+            raise ValueError("Save the session before creating a run.")
+        issues = validate_run_header_fields(run_name=run_name)
+        if issues:
+            raise ValueError("; ".join(issue.message for issue in issues))
+        run_id = run_name.strip()
+        self._run_header = self._store.create_run_header(
+            session_id=self._session.session_id,
+            run_id=run_id,
+            run_name=run_name,
+            run_notes=run_notes,
         )
-        self._mark_preflight_dirty()
-        return snapshot
+        return run_id
 
-    async def cancel_laser_tune(self) -> DeviceStatus:
-        status = await self._scenario.bundle.mircat.stop_recipe()
-        self._mark_preflight_dirty()
-        return status
+    async def save_run_header(self, *, run_name: str, run_notes: str) -> str:
+        if self._session is None:
+            raise ValueError("Save the session before saving run settings.")
+        issues = validate_run_header_fields(run_name=run_name)
+        if issues:
+            raise ValueError("; ".join(issue.message for issue in issues))
+        if self._run_header is None:
+            await self.create_run(run_name=run_name, run_notes=run_notes)
+        assert self._run_header is not None
+        self._run_header = self._store.save_run_header(
+            RunHeader(
+                run_id=self._run_header.run_id,
+                session_id=self._session.session_id,
+                run_name=run_name,
+                run_notes=run_notes,
+                created_at=self._run_header.created_at,
+                updated_at=self._run_header.updated_at,
+                saved=True,
+            )
+        )
+        return self._run_header.run_id
 
-    async def start_scan(
+    async def configure_pump(self, *, enabled: bool, shot_count: int) -> None:
+        self._pump = PumpSettings(enabled=enabled, shot_count=shot_count)
+        self._setup_saved = False
+
+    async def configure_timescale(self, *, timescale: str) -> None:
+        self._timescale = TimescaleRegime(timescale)
+        self._setup_saved = False
+
+    async def configure_probe(
         self,
         *,
-        start_wavenumber_cm1: float,
-        end_wavenumber_cm1: float,
-        step_size_cm1: float,
-        dwell_time_ms: float | None = None,
-    ) -> DeviceStatus:
-        self._draft.experiment_type = WAVELENGTH_SCAN_EXPERIMENT_TYPE
-        self._draft.scan_start_cm1 = normalize_wavenumber_cm1(start_wavenumber_cm1)
-        self._draft.scan_stop_cm1 = normalize_wavenumber_cm1(end_wavenumber_cm1)
-        self._draft.scan_step_size_cm1 = normalize_scan_speed(step_size_cm1)
-        if dwell_time_ms is not None:
-            self._draft.scan_dwell_time_ms = dwell_time_ms
-        status = await self._scenario.bundle.mircat.start_recipe(
-            build_mircat_configuration(self._draft, self._scenario),
-            self._scenario.recipe.probe_timing_mode,
+        wavelength_cm1: float,
+        emission_mode: str,
+        pulse_rate_hz: float | None,
+        pulse_width_ns: float | None,
+    ) -> None:
+        self._probe = ProbeSettings(
+            wavelength_cm1=wavelength_cm1,
+            emission_mode=ProbeEmissionMode(emission_mode),
+            pulse_rate_hz=pulse_rate_hz,
+            pulse_width_ns=pulse_width_ns,
+            ready=self._probe_connected,
+            fault=self._probe.fault if self._probe is not None else None,
         )
-        self._mark_preflight_dirty()
-        return status
+        self._setup_saved = False
 
-    async def stop_scan(self) -> DeviceStatus:
-        status = await self._scenario.bundle.mircat.stop_recipe()
-        self._mark_preflight_dirty()
-        return status
+    async def configure_lockin(
+        self,
+        *,
+        order: int,
+        time_constant_seconds: float,
+        transfer_rate_hz: float,
+    ) -> None:
+        self._lockin = LockInSettings(
+            order=order,
+            time_constant_seconds=time_constant_seconds,
+            transfer_rate_hz=transfer_rate_hz,
+            ready=self._lockin_connected,
+            fault=self._lockin.fault if self._lockin is not None else None,
+        )
+        self._setup_saved = False
 
-    async def connect_hf2(self) -> DeviceStatus:
-        status = await self._scenario.bundle.hf2li.connect()
-        self._mark_preflight_dirty()
-        return status
+    async def save_setup(
+        self,
+        *,
+        pump_enabled: bool,
+        shot_count: int,
+        timescale: str,
+        wavelength_cm1: float,
+        emission_mode: str,
+        pulse_rate_hz: float | None,
+        pulse_width_ns: float | None,
+        order: int,
+        time_constant_seconds: float,
+        transfer_rate_hz: float,
+    ) -> None:
+        await self.configure_pump(enabled=pump_enabled, shot_count=shot_count)
+        await self.configure_timescale(timescale=timescale)
+        await self.configure_probe(
+            wavelength_cm1=wavelength_cm1,
+            emission_mode=emission_mode,
+            pulse_rate_hz=pulse_rate_hz if emission_mode == ProbeEmissionMode.PULSED.value else None,
+            pulse_width_ns=pulse_width_ns if emission_mode == ProbeEmissionMode.PULSED.value else None,
+        )
+        await self.configure_lockin(
+            order=order,
+            time_constant_seconds=time_constant_seconds,
+            transfer_rate_hz=transfer_rate_hz,
+        )
+        self._saved_pump = self._pump
+        self._saved_timescale = self._timescale
+        self._saved_probe = self._probe
+        self._saved_lockin = self._lockin
+        self._setup_saved = True
 
-    async def disconnect_hf2(self) -> DeviceStatus:
-        status = await self._scenario.bundle.hf2li.disconnect()
-        self._mark_preflight_dirty()
-        return status
+    async def toggle_probe_connection(self) -> None:
+        self._probe_connected = not self._probe_connected
+        probe = self._probe or self._scenario.default_probe
+        self._probe = ProbeSettings(
+            wavelength_cm1=probe.wavelength_cm1,
+            emission_mode=probe.emission_mode,
+            pulse_rate_hz=probe.pulse_rate_hz,
+            pulse_width_ns=probe.pulse_width_ns,
+            ready=self._probe_connected,
+            fault=probe.fault,
+        )
+        self._setup_saved = False
 
-    async def run_preflight(self) -> PreflightReport:
-        self._last_preflight = await self._preflight_validator.validate(
-            self._current_recipe(),
-            self._scenario.preset,
-            SupportedV1DriverBundle(
-                mircat=self._scenario.bundle.mircat,
-                hf2li=self._scenario.bundle.hf2li,
-                t660_master=self._scenario.bundle.t660_master,
-                t660_slave=self._scenario.bundle.t660_slave,
-                mux=self._scenario.bundle.mux,
-                picoscope=self._scenario.bundle.picoscope,
+    async def clear_probe_fault(self) -> None:
+        probe = self._probe or self._scenario.default_probe
+        self._probe = ProbeSettings(
+            wavelength_cm1=probe.wavelength_cm1,
+            emission_mode=probe.emission_mode,
+            pulse_rate_hz=probe.pulse_rate_hz,
+            pulse_width_ns=probe.pulse_width_ns,
+            ready=self._probe_connected,
+            fault=None,
+        )
+        self._setup_saved = False
+
+    async def toggle_lockin_connection(self) -> None:
+        self._lockin_connected = not self._lockin_connected
+        lockin = self._lockin or self._scenario.default_lockin
+        self._lockin = LockInSettings(
+            order=lockin.order,
+            time_constant_seconds=lockin.time_constant_seconds,
+            transfer_rate_hz=lockin.transfer_rate_hz,
+            ready=self._lockin_connected,
+            fault=lockin.fault,
+        )
+        self._setup_saved = False
+
+    async def start_run(self) -> str:
+        if self._session is None or self._run_header is None or not self._run_header.saved:
+            raise ValueError("Save session and run settings before starting a run.")
+        setup = self._setup_state()
+        run = self._coordinator.start_run(
+            session=self._session,
+            run_header=self._run_header,
+            setup=setup,
+        )
+        return run.run_id
+
+    async def stop_run(self) -> str | None:
+        if self._session is None or self._run_header is None:
+            return None
+        run = self._coordinator.stop_run(self._session.session_id, self._run_header.run_id)
+        return run.run_id
+
+    def _setup_state(self) -> SetupState:
+        return self._coordinator.build_setup_state(
+            session_saved=self._session is not None,
+            run_header_saved=self._run_header is not None and self._run_header.saved,
+            pump=self._saved_pump,
+            timescale=self._saved_timescale,
+            probe=self._saved_probe,
+            lockin=self._saved_lockin,
+        )
+
+    def _session_panel(self) -> PanelModel:
+        draft = self._session_form_draft or {}
+        session = self._session
+        session_name_value = draft.get("session_name", session.session_name if session else "")
+        operator_value = draft.get("operator", session.operator if session else "")
+        sample_id_value = draft.get("sample_id", session.sample_id if session else "")
+        sample_notes_value = draft.get("sample_notes", session.sample_notes if session else "")
+        experiment_notes_value = draft.get("experiment_notes", session.experiment_notes if session else "")
+        pending_overwrite = self._pending_session_overwrite is not None
+        return PanelModel(
+            "Session Information",
+            form_action="/session/save",
+            fields=(
+                FormFieldModel(
+                    "experiment_type",
+                    "Experiment type",
+                    "select",
+                    options=(FormOptionModel(EXPERIMENT_ID, "Single-Wavelength", selected=True),),
+                ),
+                FormFieldModel(
+                    "session_name",
+                    "Name / ID",
+                    "text",
+                    session_name_value,
+                    required=True,
+                    invalid=self._session_conflict_name is not None,
+                    help_text="A saved session already uses this Name / ID." if self._session_conflict_name is not None else "",
+                ),
+                FormFieldModel("operator", "Operator", "text", operator_value, required=True),
+                FormFieldModel("sample_id", "Sample ID or sample name", "text", sample_id_value, required=True),
+                FormFieldModel("sample_notes", "Sample notes", "textarea", sample_notes_value),
+                FormFieldModel("experiment_notes", "Notes", "textarea", experiment_notes_value),
+            ),
+            actions=(
+                (ActionButtonModel("Overwrite", "/session/overwrite"), ActionButtonModel("Cancel", "/session/overwrite/cancel", "secondary"))
+                if pending_overwrite
+                else (ActionButtonModel("Save", "/session/save"),)
             ),
         )
-        self._preflight_dirty = False
-        return self._last_preflight
 
-    async def start_run(self) -> RunState:
-        preflight = await self._ensure_preflight()
-        if not preflight.ready_to_start:
-            raise ValueError("Preflight is blocked.")
-        if not self._start_experiment_supported():
-            raise ValueError("Scan Start Experiment orchestration is not yet wired in this pass.")
-        session_id = self._draft_session_id
-        if session_id is None:
-            manifest = await self.save_session(
-                self._draft.session_id_input,
-                self._draft.session_label,
-                self._draft.sample_id,
-                self._draft.operator_notes,
-            )
-            session_id = manifest.session_id
-        run_state = await self._coordinator.start_run(
-            self._current_recipe(),
-            self._scenario.preset,
-            session_id,
+    def _run_header_panel(self) -> PanelModel:
+        header = self._run_header
+        session_saved = self._session is not None
+        return PanelModel(
+            "Run Information",
+            form_action="/session/run/save",
+            fields=(
+                FormFieldModel("run_name", "Name / ID", "text", header.run_name if header else "", required=True, disabled=not session_saved),
+                FormFieldModel("run_notes", "Notes", "textarea", header.run_notes if header else "", disabled=not session_saved),
+            ),
+            actions=(ActionButtonModel("Save", "/session/run/save", disabled=not session_saved),),
+            state=None if session_saved else blocked_state("Session not saved", "Save a session before editing run settings."),
         )
-        self._active_run_id = run_state.run_id
-        self._selected_session_id = run_state.session_id
-        self._mark_preflight_dirty()
-        return run_state
 
-    async def abort_active_run(self) -> RunState | None:
-        if self._active_run_id is None:
-            return None
-        current = await self._coordinator.get_run_state(self._active_run_id)
-        if current.phase in {RunPhase.COMPLETED, RunPhase.FAULTED, RunPhase.ABORTED}:
-            return None
-        aborted = await self._coordinator.abort_run(
-            self._active_run_id,
-            RunFailureReason.OPERATOR_ABORT,
+    def _pump_panel(self, setup: SetupState) -> PanelModel:
+        pump = self._pump or self._scenario.default_pump
+        return PanelModel(
+            "Pump Settings",
+            fields=(
+                FormFieldModel("pump_enabled", "Pump enabled", "checkbox", checked=pump.enabled, disabled=not setup.session_saved),
+                FormFieldModel("shot_count", "Shot count", "number", str(pump.shot_count), min_value="1", step="1", disabled=not setup.session_saved or not pump.enabled),
+            ),
         )
-        self._mark_preflight_dirty()
-        return aborted
 
-    async def reopen_session(self, session_id: str) -> SessionManifest:
-        return await self.open_saved_session(session_id)
-
-    def _resolve_results_path(self, relative_path: str) -> Path:
-        candidate = Path(relative_path)
-        if candidate.is_absolute():
-            raise ValueError(f"Artifact paths must stay relative to the runtime root: {relative_path}")
-        resolved = (self._storage_root / candidate).resolve()
-        try:
-            resolved.relative_to(self._storage_root)
-        except ValueError as exc:
-            raise ValueError(f"Artifact path escapes the runtime root: {relative_path}") from exc
-        return resolved
-
-    def _current_recipe(self) -> ExperimentRecipe:
-        return build_recipe(self._draft, self._scenario)
-
-    def _start_experiment_supported(self) -> bool:
-        return self._draft.experiment_type == FIXED_WAVELENGTH_EXPERIMENT_TYPE
-
-    def _mark_preflight_dirty(self) -> None:
-        self._preflight_dirty = True
-
-    async def _ensure_preflight(self) -> PreflightReport:
-        if self._last_preflight is None or self._preflight_dirty:
-            self._last_preflight = await self.run_preflight()
-        return self._last_preflight
-
-    async def _current_run_phase_label(self) -> str:
-        if self._active_run_id is None:
-            return "Not started"
-        state = await self._coordinator.get_run_state(self._active_run_id)
-        return state.phase.value.title()
-
-    async def _latest_run_state(self) -> RunState | None:
-        if self._active_run_id is None:
-            return None
-        return await self._coordinator.get_run_state(self._active_run_id)
-
-    async def _device_cards(self) -> tuple[DeviceSummaryCard, ...]:
-        statuses = (
-            await self._scenario.bundle.mircat.get_status(),
-            await self._scenario.bundle.hf2li.get_status(),
-            await self._scenario.bundle.t660_master.get_status(),
-            await self._scenario.bundle.t660_slave.get_status(),
-            await self._scenario.bundle.mux.get_status(),
-            await self._scenario.bundle.picoscope.get_status(),
+    def _timescale_panel(self, setup: SetupState) -> PanelModel:
+        selected = self._timescale or self._scenario.default_timescale
+        plan = setup.acquisition_plan
+        status_items = ()
+        if plan is not None:
+            status_items = ()
+        return PanelModel(
+            "Timescale",
+            fields=(
+                FormFieldModel(
+                    "timescale",
+                    "",
+                    "select",
+                    options=tuple(
+                        FormOptionModel(regime.value, regime.value.title(), selected=regime == selected)
+                        for regime in TimescaleRegime
+                    ),
+                    disabled=not setup.session_saved,
+                ),
+            ),
+            status_items=status_items,
         )
-        return tuple(device_card_from_status(status) for status in statuses)
+
+    def _probe_panel(self, setup: SetupState) -> PanelModel:
+        probe = self._probe or self._scenario.default_probe
+        pulsed = probe.emission_mode == ProbeEmissionMode.PULSED
+        return PanelModel(
+            "Probe Settings",
+            fields=(
+                FormFieldModel("wavelength_cm1", "Wavelength (cm^-1)", "number", f"{probe.wavelength_cm1:.2f}", min_value="1", step="0.1", disabled=not setup.session_saved),
+                FormFieldModel(
+                    "emission_mode",
+                    "Emission mode",
+                    "select",
+                    options=(
+                        FormOptionModel("cw", "Continuous wave", selected=probe.emission_mode == ProbeEmissionMode.CW),
+                        FormOptionModel("pulsed", "Pulsed", selected=pulsed),
+                    ),
+                    disabled=not setup.session_saved,
+                ),
+                FormFieldModel("pulse_rate_hz", "Pulse rate (Hz)", "number", "" if probe.pulse_rate_hz is None else f"{probe.pulse_rate_hz:.0f}", min_value="1", step="1", disabled=not setup.session_saved or not pulsed),
+                FormFieldModel("pulse_width_ns", "Pulse width (ns)", "number", "" if probe.pulse_width_ns is None else f"{probe.pulse_width_ns:.0f}", min_value="1", step="1", disabled=not setup.session_saved or not pulsed),
+            ),
+            status_items=(
+                StatusItemModel("Fault", probe.fault or "none", "bad" if probe.fault else "good"),
+            ),
+            header_actions=(
+                ActionButtonModel("Disconnect" if self._probe_connected else "Connect", "/setup/probe/connection", "success" if self._probe_connected else "danger", disabled=not setup.session_saved),
+                ActionButtonModel("Clear fault", "/setup/probe/fault/clear", "secondary", disabled=not setup.session_saved or not bool(probe.fault)),
+            ),
+        )
+
+    def _lockin_panel(self, setup: SetupState) -> PanelModel:
+        lockin = self._lockin or self._scenario.default_lockin
+        return PanelModel(
+            "Lock-In Amplifier Settings",
+            fields=(
+                FormFieldModel("order", "Order", "number", str(lockin.order), min_value="1", step="1", disabled=not setup.session_saved),
+                FormFieldModel("time_constant_seconds", "Time Constant", "number", f"{lockin.time_constant_seconds:.6g}", min_value="7.832e-7", max_value="582.9", step="any", disabled=not setup.session_saved),
+                FormFieldModel("transfer_rate_hz", "Transfer Rate", "number", f"{lockin.transfer_rate_hz:.6g}", min_value="0.2196", max_value="1842000", step="any", disabled=not setup.session_saved),
+            ),
+            header_actions=(ActionButtonModel("Disconnect" if self._lockin_connected else "Connect", "/setup/lockin/connection", "success" if self._lockin_connected else "danger", disabled=not setup.session_saved),),
+        )
+
+    def _run_controls_panel(self, setup: SetupState) -> PanelModel:
+        latest = None
+        if self._session is not None and self._run_header is not None:
+            try:
+                latest = self._store.load_run_record(self._session.session_id, self._run_header.run_id)
+            except FileNotFoundError:
+                latest = None
+        details = tuple(issue.message for issue in setup.validation_issues if issue.blocking)
+        run_disabled = (not self._setup_saved) or (not setup.can_run)
+        state = None
+        if not self._setup_saved:
+            state = blocked_state("Settings not saved", "Settings must be saved before running.")
+        elif not setup.can_run:
+            state = blocked_state("Run disabled", "Run remains disabled until saved settings pass validation.", details=details)
+        return PanelModel(
+            "Run Controls",
+            actions=(
+                ActionButtonModel("Run", "/setup/run/start", disabled=run_disabled),
+                ActionButtonModel("Stop", "/setup/run/stop", "secondary", disabled=latest is None or latest.completion_status != RunLifecycleState.RUNNING),
+            ),
+            state=state,
+        )
+
+    def _results_selector_panel(
+        self,
+        metric_family: str,
+        display_mode: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> PanelModel:
+        return PanelModel(
+            "Plot controls",
+            form_action="/results",
+            fields=(
+                FormFieldModel("session_id", "Session", "text", session_id or "", read_only=True),
+                FormFieldModel("run_id", "Run", "text", run_id or "", read_only=True),
+                FormFieldModel(
+                    "metric",
+                    "Metric family",
+                    "select",
+                    options=tuple(
+                        FormOptionModel(metric.value, metric.value, selected=metric.value == metric_family)
+                        for metric in PlotMetricFamily
+                    ),
+                ),
+                FormFieldModel(
+                    "display",
+                    "Display mode",
+                    "select",
+                    options=(
+                        FormOptionModel("overlay", "Overlay mode", selected=display_mode == "overlay"),
+                        FormOptionModel("ratio", "Ratio mode", selected=display_mode == "ratio"),
+                    ),
+                ),
+            ),
+        )
+
+    def _export_panel(self, session_id: str, run_id: str) -> PanelModel:
+        base = f"/results/download?session_id={session_id}&run_id={run_id}"
+        return PanelModel(
+            "Export",
+            notes=(
+                f"Raw run data: {base}&asset=raw",
+                f"Processed result data: {base}&asset=processed",
+                f"Run metadata / settings snapshot: {base}&asset=metadata",
+            ),
+        )
+
+    def _resolve_results_selection(
+        self,
+        session_id: str | None,
+        run_id: str | None,
+    ) -> tuple[SessionRecord, object] | None:
+        if session_id and run_id:
+            try:
+                return self._store.load_session(session_id), self._store.load_run_record(session_id, run_id)
+            except FileNotFoundError:
+                return None
+        if run_id:
+            for session in self._store.list_sessions():
+                try:
+                    return session, self._store.load_run_record(session.session_id, run_id)
+                except FileNotFoundError:
+                    continue
+        latest = self._store.latest_completed_run()
+        return latest
+
+    def _run_history(self) -> tuple[RunListItem, ...]:
+        items: list[RunListItem] = []
+        for session in self._store.list_sessions():
+            for header in self._store.list_run_headers(session.session_id):
+                try:
+                    run = self._store.load_run_record(session.session_id, header.run_id)
+                    status = run.completion_status.value
+                    updated_at = run.updated_at
+                except FileNotFoundError:
+                    status = "draft"
+                    updated_at = header.updated_at
+                items.append(
+                    RunListItem(
+                        session_id=session.session_id,
+                        run_id=header.run_id,
+                        label=header.run_name,
+                        status=status,
+                        updated_at=updated_at,
+                        open_enabled=self._session is not None and self._session.session_id == session.session_id,
+                    )
+                )
+        return tuple(sorted(items, key=lambda item: item.updated_at, reverse=True))

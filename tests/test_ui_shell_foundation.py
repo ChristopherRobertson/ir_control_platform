@@ -1,34 +1,24 @@
-"""Operator-first UI shell regression tests."""
+"""Rendered UI tests for the v1 Session / Setup / Results shell."""
 
 from __future__ import annotations
 
-import asyncio
 import re
 import unittest
+from html import unescape
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, cast
 from urllib.parse import urlencode
 from wsgiref.util import setup_testing_defaults
 
 try:
     from _path_setup import ROOT  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - depends on unittest invocation style
+except ModuleNotFoundError:  # pragma: no cover
     from tests._path_setup import ROOT
-from ircp_contracts import DeviceKind, RunPhase
-from ircp_experiment_engine.runtime import build_fault, device_status_from_fault
-from ircp_platform import create_simulator_app, create_simulator_runtime_map
-from ircp_ui_shell.page_state import PageStateKind
+from ircp_platform import create_simulator_app
 
 
-def _call_wsgi(
-    app,
-    *,
-    method: str,
-    path: str,
-    body: dict[str, str] | None = None,
-) -> tuple[str, dict[str, str], str]:
+def _call_wsgi(app, *, method: str, path: str, body: dict[str, str] | None = None):
     environ: dict[str, object] = {}
     setup_testing_defaults(environ)
     environ["REQUEST_METHOD"] = method.upper()
@@ -38,10 +28,10 @@ def _call_wsgi(
         route_path, query = path, ""
     environ["PATH_INFO"] = route_path
     environ["QUERY_STRING"] = query
-    encoded_body = urlencode(body or {}).encode("utf-8")
-    environ["CONTENT_LENGTH"] = str(len(encoded_body))
+    encoded = urlencode(body or {}).encode("utf-8")
+    environ["CONTENT_LENGTH"] = str(len(encoded))
     environ["CONTENT_TYPE"] = "application/x-www-form-urlencoded"
-    environ["wsgi.input"] = BytesIO(encoded_body)
+    environ["wsgi.input"] = BytesIO(encoded)
     captured: dict[str, object] = {}
 
     def start_response(status: str, headers: list[tuple[str, str]]) -> None:
@@ -49,633 +39,375 @@ def _call_wsgi(
         captured["headers"] = dict(headers)
 
     payload = b"".join(app(environ, start_response))
-    return (
-        str(captured["status"]),
-        captured["headers"],  # type: ignore[return-value]
-        payload.decode("utf-8"),
-    )
+    return str(captured["status"]), captured["headers"], payload.decode("utf-8")
 
 
-class OperatorFirstUiTests(unittest.TestCase):
-    def _create_runtime_map(self):
-        tempdir = TemporaryDirectory()
-        self.addCleanup(tempdir.cleanup)
-        return create_simulator_runtime_map(storage_root=Path(tempdir.name))
+def _visible_text(markup: str) -> str:
+    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", markup, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", unescape(text)).strip().lower()
 
-    def _create_app(self):
+
+class V1UiShellTests(unittest.TestCase):
+    def _app(self):
         tempdir = TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         return create_simulator_app(storage_root=Path(tempdir.name))
 
-    @staticmethod
-    def _visible_action_buttons(panel):
-        return tuple(button for button in panel.actions if not button.hidden)
+    def _app_at(self, root: Path):
+        return create_simulator_app(storage_root=root)
 
-    def test_root_redirects_to_experiment(self) -> None:
-        app = self._create_app()
-        status, headers, _body = _call_wsgi(app, method="GET", path="/")
+    def test_root_redirects_to_session(self) -> None:
+        app = self._app()
+
+        status, headers, _ = _call_wsgi(app, method="GET", path="/")
 
         self.assertEqual(status, "303 See Other")
-        self.assertEqual(headers["Location"], "/experiment")
+        self.assertEqual(headers["Location"], "/session")
 
-    def test_compatibility_routes_redirect_to_experiment(self) -> None:
-        app = self._create_app()
+    def test_header_navigation_has_no_fourth_page(self) -> None:
+        app = self._app()
 
-        operate_status, operate_headers, _ = _call_wsgi(app, method="GET", path="/operate?scenario=nominal")
-        setup_status, setup_headers, _ = _call_wsgi(app, method="GET", path="/setup?scenario=nominal")
-        run_status, run_headers, _ = _call_wsgi(app, method="GET", path="/run?scenario=nominal")
-        advanced_status, advanced_headers, _ = _call_wsgi(app, method="GET", path="/setup/advanced?scenario=nominal")
-
-        self.assertEqual(operate_status, "303 See Other")
-        self.assertEqual(operate_headers["Location"], "/experiment")
-        self.assertEqual(setup_status, "303 See Other")
-        self.assertEqual(setup_headers["Location"], "/experiment")
-        self.assertEqual(run_status, "303 See Other")
-        self.assertEqual(run_headers["Location"], "/experiment")
-        self.assertEqual(advanced_status, "303 See Other")
-        self.assertEqual(advanced_headers["Location"], "/advanced")
-
-    def test_experiment_route_renders_minimal_sections(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
+        status, _headers, body = _call_wsgi(app, method="GET", path="/session")
+        text = _visible_text(body)
 
         self.assertEqual(status, "200 OK")
-        for label in (
-            "MIRcat",
-            "Fixed Wavelength",
-            "Wavelength Scan",
-            "Session",
-            "Nd:YAG Settings",
-            "HF2LI",
-            "Run Control",
-            "Save Session",
-            "Run Preflight",
-            "Start Experiment",
+        self.assertIn("session", text)
+        self.assertIn("setup", text)
+        self.assertIn("results", text)
+        for forbidden in ("run page", "advanced", "service", "analyze", "dashboard"):
+            self.assertNotIn(forbidden, text)
+
+    def test_setup_renders_required_order_and_no_forbidden_controls(self) -> None:
+        app = self._app()
+
+        status, _headers, body = _call_wsgi(app, method="GET", path="/setup")
+        text = _visible_text(body)
+
+        self.assertEqual(status, "200 OK")
+        ordered_markers = [
+            "pump settings",
+            "timescale",
+            "probe settings",
+            "lock-in amplifier settings",
+            "run controls",
+        ]
+        positions = [text.index(marker) for marker in ordered_markers]
+        self.assertEqual(positions, sorted(positions))
+        for forbidden in (
+            "step size",
+            "number of points",
+            "linear spacing",
+            "logarithmic spacing",
+            "adaptive",
+            "data acquisition section",
+            "preflight",
+            "start scan",
+            "wavelength sweep",
+            "real-time",
         ):
-            self.assertIn(label, body)
-        self.assertNotIn("Workflow Review Map", body)
-        self.assertNotIn("Readiness Matrix", body)
-        self.assertNotIn("Continue to Run", body)
-        self.assertNotIn("Pump Shots Before Probe", body)
-        self.assertNotIn("MUX Route Set", body)
-        self.assertNotIn("Pico Secondary Capture", body)
-        self.assertNotIn("T660-2", body)
-        self.assertNotIn("Trigger layout only for now", body)
-        self.assertNotIn("Current MIRcat status", body)
-        self.assertNotIn("Readout component", body)
-        self.assertNotIn("Start Acquisition", body)
-        self.assertNotIn("Stop Acquisition", body)
-        self.assertNotIn("Acquisition status", body)
-        self.assertNotIn("Live Status", body)
-        self.assertNotIn("Recent Activity / Messages", body)
-        self.assertNotIn("Probe Settings", body)
+            self.assertNotIn(forbidden, text)
 
-    def test_default_experiment_shell_hides_multi_page_navigation(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
+    def test_setup_includes_client_side_pump_toggle_script(self) -> None:
+        app = self._app()
+
+        status, _headers, body = _call_wsgi(app, method="GET", path="/setup")
 
         self.assertEqual(status, "200 OK")
-        self.assertNotIn(">Operate<", body)
-        self.assertNotIn(">Results<", body)
-        self.assertNotIn(">Advanced<", body)
-        self.assertNotIn(">Service<", body)
-        self.assertNotIn('class="scenario-chip', body)
-        self.assertNotIn('class="nav-link', body)
+        self.assertIn('input[name="pump_enabled"]', body)
+        self.assertIn('input[name="shot_count"]', body)
+        self.assertIn('shotCount.disabled = !pumpEnabled.checked;', body)
 
-    def test_blocked_timing_scenario_shows_blocked_experiment_state(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["blocked_timing"].get_operate_page())
-        state = operate_page.state
+    def test_setup_includes_client_side_draft_persistence_script(self) -> None:
+        app = self._app()
 
-        self.assertIsNotNone(state)
-        assert state is not None
-        self.assertEqual(state.kind, PageStateKind.BLOCKED)
-        self.assertIn("blocking", state.message.lower())
+        status, _headers, body = _call_wsgi(app, method="GET", path="/setup")
 
-    def test_mircat_panel_uses_toggle_controls(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-        visible_actions = self._visible_action_buttons(operate_page.laser_panel)
+        self.assertEqual(status, "200 OK")
+        self.assertIn('form[action="/setup/save"]', body)
+        self.assertIn('ircp.setupDraft', body)
+        self.assertIn('window.sessionStorage.setItem(setupDraftKey, JSON.stringify(draft));', body)
+        self.assertIn('window.sessionStorage.removeItem(setupDraftKey);', body)
 
-        self.assertEqual(tuple(button.label for button in operate_page.laser_panel.header_actions), ("Disconnect",))
-        self.assertEqual(operate_page.laser_panel.header_actions[0].tone, "danger")
-        self.assertEqual(tuple(button.label for button in visible_actions), ("Arm", "Tune", "Emission On"))
-        self.assertEqual(operate_page.laser_panel.title, "MIRcat")
-        self.assertIn("Operating Mode", tuple(field.label for field in operate_page.laser_panel.fields))
-        self.assertIn("Emission Mode", tuple(field.label for field in operate_page.laser_panel.fields))
-        self.assertIn("Wavenumber (cm^-1)", tuple(field.label for field in operate_page.laser_panel.fields))
-        self.assertEqual(operate_page.laser_panel.status_items, ())
-        self.assertEqual(operate_page.laser_panel.disclosures, ())
+    def test_setup_includes_client_side_probe_toggle_script(self) -> None:
+        app = self._app()
 
-    def test_mircat_panel_updates_toggle_labels_after_state_changes(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-        target = next(
-            float(field.value)
-            for field in asyncio.run(runtime.get_operate_page()).laser_panel.fields
-            if field.name == "tune_target_cm1"
-        )
+        status, _headers, body = _call_wsgi(app, method="GET", path="/setup")
 
-        asyncio.run(runtime.tune_laser(target))
-        asyncio.run(runtime.arm_laser())
-        asyncio.run(runtime.set_laser_emission(True))
-        operate_page = asyncio.run(runtime.get_operate_page())
-        visible_actions = self._visible_action_buttons(operate_page.laser_panel)
+        self.assertEqual(status, "200 OK")
+        self.assertIn('select[name="emission_mode"]', body)
+        self.assertIn('input[name="pulse_rate_hz"]', body)
+        self.assertIn('input[name="pulse_width_ns"]', body)
+        self.assertIn('pulseRate.disabled = !pulsed;', body)
+        self.assertIn('pulseWidth.disabled = !pulsed;', body)
 
-        self.assertEqual(tuple(button.label for button in visible_actions), ("Disarm", "Cancel", "Emission Off"))
-        self.assertEqual(visible_actions[0].tone, "danger")
-        self.assertEqual(visible_actions[1].tone, "danger")
-        self.assertEqual(visible_actions[2].tone, "danger")
+    def test_post_workflow_runs_and_results_render_saved_data(self) -> None:
+        app = self._app()
 
-        asyncio.run(runtime.cancel_laser_tune())
-        cancelled_page = asyncio.run(runtime.get_operate_page())
-        cancelled_actions = self._visible_action_buttons(cancelled_page.laser_panel)
-
-        self.assertEqual(tuple(button.label for button in cancelled_actions), ("Disarm", "Tune", "Emission Off"))
-
-    def test_mircat_panel_shows_reported_faults_in_footer_callout(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-        fault = build_fault(
-            fault_id="mircat-fault-1",
-            device_id="mircat-qcl",
-            device_kind=DeviceKind.MIRCAT,
-            code="mircat_vendor_fault",
-            message="MIRcat reported a vendor fault.",
-            vendor_code="E201",
-            vendor_message="Interlock open.",
-        )
-        cast(Any, runtime._scenario.bundle.mircat)._status = device_status_from_fault(
-            "mircat-qcl",
-            DeviceKind.MIRCAT,
-            fault,
-        )
-
-        operate_page = asyncio.run(runtime.get_operate_page())
-
-        self.assertEqual(len(operate_page.laser_panel.footer_callouts), 1)
-        self.assertEqual(operate_page.laser_panel.footer_callouts[0].title, "MIRcat Errors")
-        self.assertIn("E201", operate_page.laser_panel.footer_callouts[0].items[0])
-
-    def test_hf2_panel_uses_simple_operator_controls(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-
-        self.assertEqual(tuple(button.label for button in operate_page.acquisition_panel.header_actions), ("Disconnect",))
-        self.assertEqual(operate_page.acquisition_panel.header_actions[0].tone, "danger")
-        self.assertEqual(operate_page.acquisition_panel.actions, ())
-        self.assertEqual(operate_page.acquisition_panel.status_items, ())
-        self.assertEqual(operate_page.acquisition_panel.title, "HF2LI")
-        field_labels = tuple(field.label for field in operate_page.acquisition_panel.fields)
-        self.assertEqual(field_labels[:2], ("Order", "Time constant (s)"))
-        self.assertIn("Transfer Rate", field_labels)
-        self.assertIn("ExtRef", field_labels)
-        self.assertIn("Trigger", field_labels)
-        self.assertNotIn("Readout component", tuple(field.label for field in operate_page.acquisition_panel.fields))
-        self.assertNotIn("Capture interval (s)", tuple(field.label for field in operate_page.acquisition_panel.fields))
-        self.assertNotIn("Source", tuple(field.label for field in operate_page.acquisition_panel.fields))
-        self.assertNotIn("Mode", tuple(field.label for field in operate_page.acquisition_panel.fields))
-        self.assertEqual(operate_page.acquisition_panel.field_columns, 2)
-        extref_field = next(field for field in operate_page.acquisition_panel.fields if field.name == "hf2_extref")
-        trigger_field = next(field for field in operate_page.acquisition_panel.fields if field.name == "hf2_trigger")
-        self.assertEqual(tuple(option.label for option in extref_field.options), ("DIO 0", "DIO 1", "DIO 0|1"))
-        self.assertEqual(tuple(option.label for option in trigger_field.options), ("DIO 0", "DIO 1", "DIO 0|1"))
-
-    def test_session_panel_keeps_name_sample_id_notes_and_open_recent_fields(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-
-        field_labels = tuple(field.label for field in operate_page.session_panel.fields)
-        action_labels = tuple(button.label for button in operate_page.session_panel.actions)
-
-        self.assertEqual(field_labels, ("Name", "Sample", "ID", "Notes", "Open Recent"))
-        self.assertEqual(operate_page.session_panel.field_columns, 3)
-        self.assertEqual(action_labels, ("Save Session", "Open Recent", "Delete Session"))
-
-    def test_experiment_type_control_exists_and_posts_back_to_experiment(self) -> None:
-        app = self._create_app()
-        status, headers, _body = _call_wsgi(
+        _call_wsgi(
             app,
             method="POST",
-            path="/experiment/laser/configure",
+            path="/session/save",
             body={
-                "scenario": "nominal",
-                "experiment_type": "wavelength_scan",
+                "session_name": "Session A",
+                "operator": "Operator",
+                "sample_id": "Sample",
+                "sample_notes": "",
+                "experiment_notes": "",
+            },
+        )
+        _call_wsgi(app, method="POST", path="/session/run/save", body={"run_name": "Run 1", "run_notes": ""})
+        _call_wsgi(
+            app,
+            method="POST",
+            path="/setup/save",
+            body={
+                "pump_enabled": "1",
+                "shot_count": "10",
+                "timescale": "microseconds",
+                "wavelength_cm1": "1850",
                 "emission_mode": "cw",
-                "scan_start_cm1": "1845",
-                "scan_stop_cm1": "1855",
-                "scan_step_size_cm1": "1",
-                "scan_dwell_time_ms": "250",
+                "pulse_rate_hz": "",
+                "pulse_width_ns": "",
+                "order": "2",
+                "time_constant_seconds": "0.1",
+                "transfer_rate_hz": "224.9",
             },
         )
+        status, headers, _ = _call_wsgi(app, method="POST", path="/setup/run/start")
+        results_status, _headers, results_body = _call_wsgi(app, method="GET", path="/results?metric=R&display=ratio")
+        text = _visible_text(results_body)
 
         self.assertEqual(status, "303 See Other")
-        self.assertEqual(headers["Location"], "/experiment")
+        self.assertEqual(headers["Location"], "/results")
+        self.assertEqual(results_status, "200 OK")
+        self.assertIn("result plot", text)
+        self.assertIn("-log(sample/reference)", text)
+        self.assertIn("export", text)
 
-    def test_fixed_wavelength_mode_shows_single_tune_controls_only(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-        visible_action_labels = tuple(button.label for button in self._visible_action_buttons(operate_page.laser_panel))
-        action_map = {button.label: button for button in operate_page.laser_panel.actions}
-
-        self.assertEqual(
-            tuple(field.label for field in operate_page.laser_panel.fields),
-            ("Operating Mode", "Emission Mode", "Wavenumber (cm^-1)"),
-        )
-        tune_field = next(field for field in operate_page.laser_panel.fields if field.name == "tune_target_cm1")
-        self.assertEqual(tune_field.min_value, "1638.8")
-        self.assertEqual(tune_field.max_value, "2077.3")
-        self.assertIn("Tune", visible_action_labels)
-        self.assertNotIn("Start Scan", visible_action_labels)
-        self.assertNotIn("Stop Scan", visible_action_labels)
-        self.assertTrue(action_map["Start Scan"].hidden)
-        self.assertTrue(action_map["Stop Scan"].hidden)
-        self.assertFalse(action_map["Tune"].hidden)
-
-    def test_wavelength_scan_mode_shows_scan_controls_and_hides_single_tune(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-
-        asyncio.run(runtime.set_experiment_type("wavelength_scan"))
-        operate_page = asyncio.run(runtime.get_operate_page())
-        visible_action_labels = tuple(button.label for button in self._visible_action_buttons(operate_page.laser_panel))
-        action_map = {button.label: button for button in operate_page.laser_panel.actions}
-
-        field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
-        self.assertIn("Operating Mode", field_labels)
-        self.assertIn("Emission Mode", field_labels)
-        self.assertIn("Start wavenumber (cm^-1)", field_labels)
-        self.assertIn("Stop wavenumber (cm^-1)", field_labels)
-        scan_start_field = next(field for field in operate_page.laser_panel.fields if field.name == "scan_start_cm1")
-        scan_stop_field = next(field for field in operate_page.laser_panel.fields if field.name == "scan_stop_cm1")
-        self.assertEqual(scan_start_field.min_value, "1638.8")
-        self.assertEqual(scan_start_field.max_value, "2077.3")
-        self.assertEqual(scan_stop_field.min_value, "1638.8")
-        self.assertEqual(scan_stop_field.max_value, "2077.3")
-        self.assertIn("Scan Speed", field_labels)
-        scan_speed_field = next(field for field in operate_page.laser_panel.fields if field.name == "scan_step_size_cm1")
-        self.assertEqual(scan_speed_field.help_text, "0.1 to 10000")
-        self.assertEqual(scan_speed_field.min_value, "0.1")
-        self.assertEqual(scan_speed_field.max_value, "10000")
-        self.assertNotIn("Dwell time per point (ms)", field_labels)
-        self.assertIn("Start Scan", visible_action_labels)
-        self.assertIn("Stop Scan", visible_action_labels)
-        self.assertNotIn("Tune", visible_action_labels)
-        self.assertTrue(action_map["Tune"].hidden)
-        self.assertFalse(action_map["Start Scan"].hidden)
-        self.assertFalse(action_map["Stop Scan"].hidden)
-        self.assertIsNotNone(operate_page.state)
-        assert operate_page.state is not None
-        self.assertIn("partially wired", operate_page.state.title.lower())
-
-    def test_operating_mode_clamps_wavenumber_fields_to_mircat_limits(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-
-        asyncio.run(
-            runtime.configure_operating_mode(
-                experiment_type="wavelength_scan",
-                emission_mode="cw",
-                tune_target_cm1=1500.0,
-                scan_start_cm1=1500.0,
-                scan_stop_cm1=2200.0,
-            )
-        )
-        operate_page = asyncio.run(runtime.get_operate_page())
-        fields = {field.name: field for field in operate_page.laser_panel.fields}
-
-        self.assertEqual(fields["scan_start_cm1"].value, "1638.80")
-        self.assertEqual(fields["scan_stop_cm1"].value, "2077.30")
-        self.assertEqual(fields["scan_step_size_cm1"].value, "1.00")
-
-    def test_operating_mode_clamps_scan_speed_to_supported_limits(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-
-        asyncio.run(
-            runtime.configure_operating_mode(
-                experiment_type="wavelength_scan",
-                emission_mode="cw",
-                scan_step_size_cm1=50_000.0,
-            )
-        )
-        operate_page = asyncio.run(runtime.get_operate_page())
-        fields = {field.name: field for field in operate_page.laser_panel.fields}
-
-        self.assertEqual(fields["scan_step_size_cm1"].value, "10000.00")
-
-    def test_pulsed_mode_derives_duty_cycle_and_applies_pulse_limits(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-
-        asyncio.run(
-            runtime.configure_operating_mode(
-                experiment_type="fixed_wavelength",
-                emission_mode="pulsed",
-                pulse_repetition_rate_hz=3_000_000,
-                pulse_width_ns=1005,
-            )
-        )
-        operate_page = asyncio.run(runtime.get_operate_page())
-        fields = {field.name: field for field in operate_page.laser_panel.fields}
-
-        self.assertEqual(fields["pulse_repetition_rate_hz"].value, "3000000")
-        self.assertEqual(fields["pulse_repetition_rate_hz"].min_value, "10")
-        self.assertEqual(fields["pulse_repetition_rate_hz"].max_value, "3000000")
-        self.assertEqual(fields["pulse_width_ns"].value, "100")
-        self.assertEqual(fields["pulse_width_ns"].min_value, "20")
-        self.assertEqual(fields["pulse_width_ns"].max_value, "1005")
-        self.assertEqual(fields["pulse_duty_cycle_percent"].value, "30.000")
-        self.assertTrue(fields["pulse_duty_cycle_percent"].read_only)
-
-    def test_experiment_page_excludes_routing_timing_and_removed_sections(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
-
-        self.assertEqual(status, "200 OK")
-        self.assertNotIn("MUX Route Set", body)
-        self.assertNotIn("Pump Shots Before Probe", body)
-        self.assertNotIn("Pico Secondary Capture", body)
-        self.assertNotIn("Timing Program", body)
-        self.assertNotIn("Readiness Matrix", body)
-        self.assertNotIn("Probe Settings", body)
-        self.assertNotIn("Current MIRcat status", body)
-        self.assertNotIn("Readout component", body)
-        self.assertNotIn("Start Acquisition", body)
-        self.assertNotIn("Stop Acquisition", body)
-        self.assertNotIn("Acquisition status", body)
-        self.assertNotIn("Live Status", body)
-        self.assertNotIn("Recent Activity / Messages", body)
-
-    def test_save_session_and_start_experiment_flow_updates_experiment_and_results(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-
-        manifest = asyncio.run(
-            runtime.save_session(
-                session_id="bench-mvp-001",
-                session_label="Bench MVP",
-                sample_id="sample-42",
-                operator_notes="operator review",
-            )
-        )
-        run_state = asyncio.run(runtime.start_run())
-        operate_page = asyncio.run(runtime.get_operate_page())
-        results_page = asyncio.run(runtime.get_results_page(run_state.session_id))
-
-        self.assertEqual(manifest.session_id, "bench-mvp-001")
-        self.assertEqual(manifest.session_id, run_state.session_id)
-        self.assertEqual(run_state.phase, RunPhase.COMPLETED)
-        self.assertEqual(operate_page.session_panel.status_items, ())
-        self.assertIsNotNone(operate_page.results_handoff)
-        assert operate_page.results_handoff is not None
-        self.assertEqual(operate_page.results_handoff.label, "Open Latest Session in Results")
-        self.assertEqual(operate_page.results_handoff.session_id, run_state.session_id)
-        self.assertFalse(hasattr(operate_page, "recent_activity"))
-        self.assertFalse(hasattr(operate_page, "live_status"))
-        self.assertIsNotNone(results_page.selected_session)
-        assert results_page.selected_session is not None
-        self.assertEqual(results_page.selected_session.session_id, run_state.session_id)
-        self.assertGreaterEqual(len(results_page.artifact_panels), 1)
-        self.assertGreaterEqual(len(results_page.visualization_panels), 1)
-        self.assertGreaterEqual(len(results_page.export_panels), 1)
-        self.assertGreaterEqual(len(results_page.export_actions), 1)
-        self.assertGreaterEqual(len(results_page.event_log), 1)
-
-    def test_session_id_must_be_unique_across_saved_sessions(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-
-        asyncio.run(
-            runtime.save_session(
-                session_id="bench-mvp-unique",
-                session_label="Bench MVP",
-                sample_id="sample-42",
-                operator_notes="operator review",
-            )
-        )
-
-        with self.assertRaises(ValueError):
-            asyncio.run(
-                runtime.save_session(
-                    session_id="bench-mvp-unique",
-                    session_label="Bench MVP 2",
-                    sample_id="sample-43",
-                    operator_notes="duplicate id",
-                )
-            )
-
-    def test_ndyag_panel_is_off_by_default_and_disables_inputs(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-
-        self.assertEqual(operate_page.ndyag_panel.title, "Nd:YAG Settings")
-        self.assertEqual(tuple(button.label for button in operate_page.ndyag_panel.header_actions), ("On",))
-        self.assertEqual(operate_page.ndyag_panel.field_columns, 3)
-        fields = {field.name: field for field in operate_page.ndyag_panel.fields}
-        self.assertEqual(fields["ndyag_repetition_rate_hz"].label, "Rep. Rate (Hz)")
-        self.assertEqual(fields["ndyag_shot_count"].label, "Shot Count")
-        self.assertEqual(fields["ndyag_continuous"].label, "Cont.")
-        self.assertEqual(fields["ndyag_repetition_rate_hz"].min_value, "10")
-        self.assertEqual(fields["ndyag_shot_count"].max_value, "100")
-        self.assertTrue(fields["ndyag_repetition_rate_hz"].disabled)
-        self.assertTrue(fields["ndyag_shot_count"].disabled)
-        self.assertTrue(fields["ndyag_continuous"].disabled)
-
-    def test_emission_mode_toggle_uses_client_side_visibility_instead_of_auto_submit(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
-
-        self.assertEqual(status, "200 OK")
-        self.assertRegex(body, r'data-async-form="true"')
-        self.assertRegex(body, r'data-field-name="tune_target_cm1"')
-        self.assertRegex(body, r'data-field-name="scan_start_cm1"')
-        self.assertRegex(body, r'data-field-name="scan_stop_cm1"')
-        self.assertRegex(body, r'data-field-name="scan_step_size_cm1"')
-        self.assertNotRegex(body, r'data-field-name="scan_dwell_time_ms"')
-        self.assertRegex(body, r'data-field-name="pulse_repetition_rate_hz"')
-        self.assertRegex(body, r'data-field-name="pulse_width_ns"')
-        self.assertRegex(body, r'data-field-name="pulse_duty_cycle_percent"')
-        self.assertRegex(body, r'data-action-button="/experiment/laser/tune"')
-        self.assertRegex(body, r'data-action-button="/experiment/laser/scan/start"')
-        self.assertRegex(body, r'data-action-button="/experiment/laser/scan/stop"')
-        self.assertRegex(body, r"syncOperatingModeFields")
-        self.assertRegex(body, r"syncFieldVisibility")
-        self.assertRegex(body, r"syncActionVisibility")
-        self.assertRegex(body, r"syncNdyagFields")
-        self.assertRegex(body, r"submitAsyncForm")
-        self.assertRegex(body, r"operatingModeFieldNames")
-        self.assertRegex(body, r"root instanceof HTMLFormElement")
-        self.assertRegex(body, r"collectAsyncFormState")
-        self.assertRegex(body, r"restoreAsyncFormState")
-        self.assertRegex(body, r"syncOperatingModeActionButtons")
-        self.assertRegex(body, r"guardedLaserActions")
-        self.assertRegex(body, r"form\.reportValidity\(\)")
-        self.assertRegex(body, r'input", \(event\)')
-        self.assertRegex(body, r'change", \(event\)')
-        self.assertIn('name="pulse_repetition_rate_hz"', body)
-        self.assertIn('min="10"', body)
-        self.assertIn('max="3000000"', body)
-        self.assertIn('name="pulse_width_ns"', body)
-        self.assertIn('min="20"', body)
-        self.assertIn('max="1005"', body)
-        self.assertIn('name="pulse_duty_cycle_percent"', body)
-        self.assertIn("readonly", body)
-        self.assertNotIn("this.form.submit()", body)
-        self.assertNotIn("this.form.requestSubmit()", body)
-
-    def test_experiment_post_routes_redirect_back_to_experiment(self) -> None:
-        app = self._create_app()
-        status, headers, _body = _call_wsgi(
-            app,
-            method="POST",
-            path="/experiment/session/save",
-            body={
-                "scenario": "nominal",
-                "session_id_input": "bench-mvp-post",
-                "session_label": "Bench MVP",
-                "sample_id": "sample-42",
-                "operator_notes": "operator review",
-            },
-        )
-
-        self.assertEqual(status, "303 See Other")
-        self.assertEqual(headers["Location"], "/experiment")
-
-    def test_delete_session_route_removes_saved_session_and_files(self) -> None:
+    def test_session_page_renders_open_buttons_and_disables_run_open_until_session_opened(self) -> None:
         tempdir = TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
-        storage_root = Path(tempdir.name)
-        app = create_simulator_app(storage_root=storage_root)
-        sessions_root = storage_root / "sessions"
-        seeded_session_id = "saved-session-001"
-        seeded_session_dir = sessions_root / seeded_session_id
-        self.assertTrue(seeded_session_dir.is_dir())
+        root = Path(tempdir.name)
+        app = self._app_at(root)
 
-        delete_status, delete_headers, _body = _call_wsgi(
+        _call_wsgi(
             app,
             method="POST",
-            path="/experiment/session/delete",
+            path="/session/save",
             body={
-                "scenario": "nominal",
-                "recent_session_id": seeded_session_id,
+                "session_name": "Session A",
+                "operator": "Operator",
+                "sample_id": "Sample",
+                "sample_notes": "",
+                "experiment_notes": "",
             },
         )
+        _call_wsgi(app, method="POST", path="/session/run/save", body={"run_name": "Run 1", "run_notes": ""})
+        second_app = self._app_at(root)
+        status, _headers, body = _call_wsgi(second_app, method="GET", path="/session")
+        text = _visible_text(body)
 
-        self.assertEqual(delete_status, "303 See Other")
-        self.assertEqual(delete_headers["Location"], "/experiment")
-        self.assertFalse(seeded_session_dir.exists())
+        self.assertEqual(status, "200 OK")
+        self.assertIn("open existing session", text)
+        self.assertIn("open existing run for review", text)
+        self.assertIn("open the session first.", text)
+        self.assertIn('action="/session/open"', body)
+        self.assertIn('action="/session/run/open"', body)
+        self.assertIn('disabled', body)
 
-        page_status, _headers, page_body = _call_wsgi(app, method="GET", path="/experiment")
-        self.assertEqual(page_status, "200 OK")
-        self.assertNotIn(f'<option value="{seeded_session_id}"', page_body)
+    def test_opening_run_without_opening_session_is_rejected(self) -> None:
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        root = Path(tempdir.name)
+        original = self._app_at(root)
+        reopened = self._app_at(root)
 
-    def test_results_and_advanced_routes_render_secondary_surfaces(self) -> None:
-        app = self._create_app()
-
-        results_status, _headers, results_body = _call_wsgi(app, method="GET", path="/results?scenario=nominal")
-        advanced_status, _headers, advanced_body = _call_wsgi(app, method="GET", path="/advanced?scenario=nominal")
-
-        self.assertEqual(results_status, "200 OK")
-        self.assertIn("Recent Sessions", results_body)
-        self.assertIn("Artifacts and Provenance", results_body)
-        self.assertIn("Visualization and Trace Review", results_body)
-        self.assertIn("Download and Export", results_body)
-        self.assertIn("Apply Filters", results_body)
-        self.assertIn("Download Manifest", results_body)
-
-        self.assertEqual(advanced_status, "200 OK")
-        self.assertIn("Timing and marker detail", advanced_body)
-        self.assertIn("Readiness Matrix", advanced_body)
-        self.assertNotIn("Live Status", advanced_body)
-
-    def test_results_route_supports_filter_and_selection_states(self) -> None:
-        app = self._create_app()
-
-        filtered_status, _headers, filtered_body = _call_wsgi(
-            app,
-            method="GET",
-            path="/results?scenario=nominal&search=no-match",
+        _call_wsgi(
+            original,
+            method="POST",
+            path="/session/save",
+            body={
+                "session_name": "Session A",
+                "operator": "Operator",
+                "sample_id": "Sample",
+                "sample_notes": "",
+                "experiment_notes": "",
+            },
         )
-        invalid_status, _headers, invalid_body = _call_wsgi(
-            app,
-            method="GET",
-            path="/results?scenario=nominal&session_id=missing-session-999",
-        )
-        cleared_status, _headers, cleared_body = _call_wsgi(
-            app,
-            method="GET",
-            path="/results?scenario=nominal&session_id=__none__",
+        _call_wsgi(original, method="POST", path="/session/run/save", body={"run_name": "Run 1", "run_notes": ""})
+
+        status, _headers, response = _call_wsgi(
+            reopened,
+            method="POST",
+            path="/session/run/open",
+            body={"session_id": "Session A", "run_id": "Run 1"},
         )
 
-        self.assertEqual(filtered_status, "200 OK")
-        self.assertIn("No sessions match the current filter", filtered_body)
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("Open the session before opening one of its runs.", response)
 
-        self.assertEqual(invalid_status, "200 OK")
-        self.assertIn("Saved session not found", invalid_body)
+    def test_open_session_then_open_run_populates_session_page(self) -> None:
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        root = Path(tempdir.name)
+        original = self._app_at(root)
+        reopened = self._app_at(root)
 
-        self.assertEqual(cleared_status, "200 OK")
-        self.assertIn("No session selected", cleared_body)
-        self.assertIn("Choose one saved session to inspect metrics", cleared_body)
-
-    def test_results_download_routes_serve_manifest_and_events(self) -> None:
-        app = self._create_app()
-
-        manifest_status, manifest_headers, manifest_body = _call_wsgi(
-            app,
-            method="GET",
-            path="/results/download?scenario=nominal&session_id=saved-session-001&asset=manifest",
+        _call_wsgi(
+            original,
+            method="POST",
+            path="/session/save",
+            body={
+                "session_name": "Session A",
+                "operator": "Operator",
+                "sample_id": "Sample",
+                "sample_notes": "",
+                "experiment_notes": "",
+            },
         )
-        events_status, events_headers, events_body = _call_wsgi(
-            app,
-            method="GET",
-            path="/results/download?scenario=nominal&session_id=saved-session-001&asset=events",
+        _call_wsgi(original, method="POST", path="/session/run/save", body={"run_name": "Run 1", "run_notes": "Run notes"})
+
+        open_session_status, open_session_headers, _ = _call_wsgi(
+            reopened,
+            method="POST",
+            path="/session/open",
+            body={"session_id": "Session A"},
         )
-
-        self.assertEqual(manifest_status, "200 OK")
-        self.assertEqual(manifest_headers["Content-Type"], "application/json; charset=utf-8")
-        self.assertIn('attachment; filename="saved-session-001-manifest.json"', manifest_headers["Content-Disposition"])
-        self.assertIn('"session_id": "saved-session-001"', manifest_body)
-
-        self.assertEqual(events_status, "200 OK")
-        self.assertEqual(events_headers["Content-Type"], "application/x-ndjson; charset=utf-8")
-        self.assertIn('attachment; filename="saved-session-001-events.ndjson"', events_headers["Content-Disposition"])
-        self.assertIn('"event_id": "saved-session-event-created"', events_body)
-
-    def test_service_and_analyze_routes_remain_available_but_secondary(self) -> None:
-        app = self._create_app()
-
-        service_status, _headers, service_body = _call_wsgi(app, method="GET", path="/service?scenario=nominal")
-        analyze_status, _headers, analyze_body = _call_wsgi(
-            app,
-            method="GET",
-            path="/analyze?scenario=nominal&session_id=saved-session-001",
+        open_run_status, open_run_headers, _ = _call_wsgi(
+            reopened,
+            method="POST",
+            path="/session/run/open",
+            body={"session_id": "Session A", "run_id": "Run 1"},
         )
+        status, _headers, body = _call_wsgi(reopened, method="GET", path="/session")
 
-        self.assertEqual(service_status, "200 OK")
-        self.assertIn("Device Diagnostics", service_body)
-        self.assertIn("Calibration and recovery scope", service_body)
+        self.assertEqual(open_session_status, "303 See Other")
+        self.assertEqual(open_session_headers["Location"], "/session")
+        self.assertEqual(open_run_status, "303 See Other")
+        self.assertEqual(open_run_headers["Location"], "/session")
+        self.assertEqual(status, "200 OK")
+        self.assertIn('value="Session A"', body)
+        self.assertIn('value="Run 1"', body)
+        self.assertIn("Run notes", body)
 
-        self.assertEqual(analyze_status, "200 OK")
-        self.assertIn("Saved-session scientific evaluation surface", analyze_body)
-        self.assertIn("Reprocessing and Comparison", analyze_body)
+    def test_duplicate_session_id_redirects_to_overwrite_prompt(self) -> None:
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        root = Path(tempdir.name)
+        app = self._app_at(root)
+        body = {
+            "session_name": "Session A",
+            "operator": "Operator",
+            "sample_id": "Sample",
+            "sample_notes": "",
+            "experiment_notes": "",
+        }
 
-    def test_active_docs_point_to_operator_ui_mvp(self) -> None:
-        repo_root = Path(ROOT)
-        ui_foundation = (repo_root / "docs" / "ui_foundation.md").read_text(encoding="utf-8")
-        operator_ui_mvp = (repo_root / "docs" / "operator_ui_mvp.md").read_text(encoding="utf-8")
+        _call_wsgi(app, method="POST", path="/session/save", body=body)
+        duplicate_app = self._app_at(root)
+        status, _headers, response = _call_wsgi(duplicate_app, method="POST", path="/session/save", body=body)
 
-        self.assertIn("default operator experience centers on one `Experiment` page", ui_foundation)
-        self.assertIn("## Default Experiment Workflow", operator_ui_mvp)
+        self.assertEqual(status, "303 See Other")
+        self.assertEqual(_headers["Location"], "/session")
+        self.assertEqual(response, "")
 
-    def test_ui_shell_avoids_direct_driver_and_persistence_imports(self) -> None:
+    def test_duplicate_session_prompts_for_overwrite(self) -> None:
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        root = Path(tempdir.name)
+        app = self._app_at(root)
+        body = {
+            "session_name": "Session A",
+            "operator": "Operator",
+            "sample_id": "Sample",
+            "sample_notes": "",
+            "experiment_notes": "",
+        }
+
+        _call_wsgi(app, method="POST", path="/session/save", body=body)
+        duplicate_app = self._app_at(root)
+        status, headers, _ = _call_wsgi(duplicate_app, method="POST", path="/session/save", body=body)
+        session_status, _headers, markup = _call_wsgi(duplicate_app, method="GET", path=headers["Location"])
+        text = _visible_text(markup)
+
+        self.assertEqual(status, "303 See Other")
+        self.assertEqual(session_status, "200 OK")
+        self.assertIn("a saved session already uses this name / id.", text)
+        self.assertIn("overwrite", text)
+        self.assertIn("cancel", text)
+
+    def test_cancel_overwrite_keeps_conflict_highlight_visible(self) -> None:
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        root = Path(tempdir.name)
+        original = self._app_at(root)
+        body = {
+            "session_name": "Session A",
+            "operator": "Operator",
+            "sample_id": "Sample",
+            "sample_notes": "",
+            "experiment_notes": "",
+        }
+
+        _call_wsgi(original, method="POST", path="/session/save", body=body)
+        duplicate_app = self._app_at(root)
+        _call_wsgi(duplicate_app, method="POST", path="/session/save", body=body)
+        _call_wsgi(duplicate_app, method="POST", path="/session/overwrite/cancel")
+        status, _headers, markup = _call_wsgi(duplicate_app, method="GET", path="/session")
+        text = _visible_text(markup)
+
+        self.assertEqual(status, "200 OK")
+        self.assertIn("a saved session already uses this name / id.", text)
+        self.assertIn('class="field invalid"', markup)
+
+    def test_confirm_overwrite_replaces_saved_session_metadata(self) -> None:
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        root = Path(tempdir.name)
+        original = self._app_at(root)
+        duplicate = self._app_at(root)
+
+        _call_wsgi(
+            original,
+            method="POST",
+            path="/session/save",
+            body={
+                "session_name": "Session A",
+                "operator": "Original Operator",
+                "sample_id": "Sample",
+                "sample_notes": "",
+                "experiment_notes": "Original",
+            },
+        )
+        _call_wsgi(
+            duplicate,
+            method="POST",
+            path="/session/save",
+            body={
+                "session_name": "Session A",
+                "operator": "Updated Operator",
+                "sample_id": "Sample B",
+                "sample_notes": "Updated sample",
+                "experiment_notes": "Updated",
+            },
+        )
+        _call_wsgi(duplicate, method="POST", path="/session/overwrite")
+        status, _headers, markup = _call_wsgi(duplicate, method="GET", path="/session")
+        text = _visible_text(markup)
+
+        self.assertEqual(status, "200 OK")
+        self.assertIn('value="Updated Operator"', markup)
+        self.assertIn('Updated sample', markup)
+
+    def test_ui_shell_does_not_import_device_or_data_packages(self) -> None:
         ui_root = Path(ROOT) / "ui-shell" / "src" / "ircp_ui_shell"
-        banned_fragments = ("ircp_drivers", "ircp_data_pipeline", "ircp_processing", "ircp_analysis")
-
+        old_repo_name = "Control" + "_" + "System"
+        banned = ("ircp_drivers", "ircp_data_pipeline", "ircp_processing", "ircp_analysis", old_repo_name)
         for path in ui_root.glob("*.py"):
             source = path.read_text(encoding="utf-8")
-            for fragment in banned_fragments:
-                self.assertNotIn(fragment, source, f"{path.name} should not import {fragment}")
+            for fragment in banned:
+                self.assertNotIn(fragment, source, f"{path.name} imports {fragment}")
 
 
 if __name__ == "__main__":

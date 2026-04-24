@@ -1,145 +1,91 @@
-# REFACTOR.md — Transition Rules for the IR Control Platform
-
-## Active Documents
-Use the repository documents this way:
-
-- `AGENTS.md` defines the required product outcome and fixed architecture.
-- `docs/operator_ui_mvp.md` defines the active `Experiment` acceptance target.
-- `docs/ui_foundation.md` defines the active UI-shell rules.
-- `docs/package_boundaries.md` defines package ownership and dependency direction.
-- `REFACTOR.md` defines what may be salvaged, rewritten, deleted, or retired during the migration.
-- `PLANS.md` defines the only active development sequence.
+# REFACTOR.md - Migration Rules For V1
 
 ## Purpose
-This document governs how the current codebase is replaced while preserving the architecture already established in `ir_control_platform`.
+This document governs what may be salvaged from `Control_System` and what must be replaced while building the generic `Single-Wavelength Pump-Probe` vertical slice in `ir_control_platform`.
 
-Use it to decide:
-- what must be preserved
-- what knowledge should be extracted and rewritten
-- what structure must be replaced
-- what documentation or code should be removed because it no longer helps
+## Salvage Principles
+Preserve hardware and scientific knowledge only when it fits the new package boundaries.
 
-This is not an in-place cleanup. It is a controlled replacement.
+Useful material may include:
 
-## Core Direction
-Treat the current implementation as a source of:
-- hardware integration knowledge
-- vendor API usage patterns
-- scientific logic
-- data-format knowledge
-- error-code handling knowledge
-- useful datasets and fixtures
-- practical lessons from bench use
+- MIRcat SDK calls, status interpretation, readiness checks, and vendor error mapping
+- MIRcat single-wavelength tuning and CW/pulsed emission semantics
+- HF2LI LabOne connection, node, poll, sample, X/Y/R/phase parsing, and file writing lessons
+- timing/delay generator command semantics needed for acquisition windows
+- pump readiness and fault handling knowledge
+- hardware configuration ranges and defaults
+- raw data format knowledge and sample/reference ratio formulas
+- deterministic fixtures and fault cases
 
-Do not treat it as the structural template for the new product.
+## Delete / Replace Rules
+Generic experiment-agnostic UI surfaces are REPLACE or DELETE.
 
-Active rewrite decisions:
-- Preserve valuable low-level logic and scientific knowledge.
-- Do not preserve the current UI architecture.
-- Do not preserve UI ownership of orchestration, persistence, processing, or analysis.
-- Preserve the control-plane and data-plane split already established in `ir_control_platform`.
-- Use iterative refinement of the default `Experiment` surface as the sequencing authority for new work.
-- Let supporting backend work and secondary surfaces follow reviewed `Experiment` needs instead of advancing independently.
-- Remove obsolete phase-tied and workflow-map guidance once active guidance replaces it.
+Device-first page layout is REPLACE.
 
-## Non-negotiable Rewrite Rules
-1. **One implementation path per workflow.**
-   Do not keep alternate legacy paths, compatibility modes, or fallback branches for the same behavior.
-2. **No legacy UI structure in the new product.**
-   Do not port old screens, callback trees, or device-first route hierarchies into `ui-shell`.
-3. **No direct UI-to-device orchestration.**
-   Coordinated device control belongs in `experiment-engine` and `drivers`, never in pages or widgets.
-4. **No UI-owned persistence, processing, analysis, or export truth.**
-   Those responsibilities belong in `data-pipeline`, `processing`, `analysis`, and `reports`.
-5. **Fail explicitly instead of bypassing.**
-   If a device faults or a required dependency is missing, surface the reason and stop cleanly.
-6. **Prefer vendor-reported status over duplicated protection logic.**
-   Preserve vendor error mappings. Do not re-implement external protections in the UI.
-7. **No silent retries, hidden correction, or workaround branches.**
-8. **Delete aggressively after extraction.**
-   Once useful content has been re-homed cleanly, remove the obsolete structure from the active path.
-9. **Keep historical reference material out of the active execution path.**
-   Historical docs may exist as reference, but they must not compete with active guidance.
-10. **Record destructive removals.**
-    Keep a clear note of what was removed, what replaced it, and why.
+Direct UI-to-device orchestration is DELETE.
 
-## What May Be Salvaged
-Salvage only material that supports the new architecture:
-- low-level device communication logic
-- vendor API wrapping knowledge
-- error and fault mappings
-- validated parameter translations and unit handling
-- file readers, writers, and metadata interpretation
-- calibration loaders and calibration application knowledge
-- reusable scientific transforms
-- useful tests, diagnostics, replay fixtures, and setup notes
+UI-owned persistence is DELETE.
 
-Re-home salvaged material into the correct destination package such as:
-- `contracts`
-- `platform`
-- `drivers`
-- `experiment-engine`
-- `data-pipeline`
-- `processing`
-- `analysis`
-- `reports`
-- `simulators`
-- `e2e`
+UI-owned scientific transforms are DELETE.
 
-## What Must Not Be Carried Forward
-Do not carry these patterns or structures into the active product path:
-- old UI architecture
-- device-first navigation
-- per-screen business logic
-- UI-owned orchestration
-- UI-owned persistence
-- UI-owned processing or analysis truth
-- compatibility layers
-- fallback logic
-- duplicated execution paths
-- giant architecture-led shells that expose internal surfaces before the operator workflow is usable
+Broad future-proof controls not required for v1 are DELETE or DEFER.
 
-## Active Transition Sequence
-Use `PLANS.md` for the authoritative phase order. The rewrite sequence is:
+Sample-specific product logic is DELETE.
 
-1. Documentation reset
-   Remove conflicting guidance and establish one active operator-first path.
-2. Experiment-first iteration
-   Build and repeatedly refine the default `Experiment` experience first.
-3. Results and review promotion
-   Promote recent sessions and persisted summaries outward only after the reviewed `Experiment` workflow proves they belong on a secondary surface.
-4. Advanced and service extraction
-   Move timing, routing, calibration, and recovery detail out of the default path once routine operation is stable.
-5. Incremental backend wiring
-   Wire and harden real actions in UI priority order only where the reviewed `Experiment` workflow proves they are needed.
-6. Real-device hardening
-   Validate the minimum supported hardware flows and explicit failure behavior.
-7. Deeper processing and analysis
-   Expand processing and analysis only after the operator-facing UI has been validated.
+Do not carry forward:
 
-Partial secondary-surface scaffolds may exist early, but they remain subordinate to the `Experiment` workflow during active iteration.
+- old React route hierarchy
+- device dashboards as the primary product
+- MIRcat scan controls
+- HF2LI broad dashboard tabs
+- raw timing channel editors in operator flow
+- raw MUX routing editors in operator flow
+- wavelength sweep or spectral map workflows
+- multi-path compatibility code
+- fallback behavior
+- old screen-driven state
+- UI-owned analysis or export truth
 
-## Deletion Rules
-Delete or retire these when active replacements exist:
-- obsolete phase-specific UI docs
-- stale workflow-map plans that are no longer the current execution guide
-- direct vendor API calls from presentation code
-- screen controllers or view-models that embed orchestration
-- UI-triggered persistence code
-- UI-local processing and analysis pipelines
-- duplicated validation logic across screens
-- compatibility code that keeps legacy behavior alive
+## Required Re-Homing
+Re-home accepted knowledge into the correct destination:
 
-Do not keep obsolete docs “for history” when they compete with the active plan. If the content still matters, merge the useful part into an active document and remove the obsolete file.
+- `contracts/` for session, run, setup, recipe, plotting, raw record, and artifact schemas
+- `drivers/*` for normalized device integration and vendor error mapping
+- `experiment-engine/` for run lifecycle and coordinated behavior
+- `data-pipeline/` for persistence and artifacts
+- `processing/` for reusable transforms
+- `analysis/` for derived scientific logic beyond reusable transforms
+- `reports/` for exports
+- `simulators/` for deterministic success and fault paths
+- `ui-shell/` for presentation only
 
-## Data And Verification Rules
-- Do not strand historical data. Existing runs, calibrations, and reference datasets must stay readable, importable, or explicitly retired with documentation.
-- Version all new persisted formats.
-- Preserve provenance from raw artifacts through processed, analysis, and export outputs.
-- Prefer importers over manual conversion when historical formats matter.
-- Keep simulator-backed validation as the default path until a phase explicitly requires hardware.
+## V1 Forbidden Scope
+The active product must not implement:
 
-## Final Instruction
-Assume the old UI is not the blueprint.
-Assume the old knowledge base is valuable.
-Assume the correct outcome is a clean new architecture with selectively preserved assets and decisively removed obsolete structure and guidance.
+- wavelength scanning
+- wavelength lists
+- queued spectral acquisition
+- spectral maps
+- generic all-device dashboards
+- separate data acquisition page or section
+- separate run page
+- preflight page or section
+- real-time plotting
+- broad service pages
+- advanced scaffolding
+- free-form delay-generator channel editing
+- raw MUX routing editing
+- universal spectroscopy interfaces
+- sample-specific workflows
+
+## Verification Rules
+- New persisted formats are versioned.
+- Raw, processed, metadata, and export artifacts remain distinct.
+- Processed outputs cite raw inputs.
+- Exports cite persisted sources.
+- UI-shell remains a thin client of runtime contracts.
+- `ir_control_platform` never imports or shells into `Control_System` at runtime.
+- Real drivers fail clearly if SDKs or hardware are unavailable.
+
+## Control_System Boundary
+The parent workspace rules make `Control_System` read-only. Do not edit it, create files in it, or depend on it. Documentation changes that would be desirable in the old repo are captured in the target repo's salvage matrix and deletion ledger instead.

@@ -11,6 +11,7 @@ class PageStateKind(str, Enum):
     BLOCKED = "blocked"
     WARNING = "warning"
     FAULT = "fault"
+    SUCCESS = "success"
     EMPTY = "empty"
     UNAVAILABLE = "unavailable"
     RECOVERY = "recovery"
@@ -38,6 +39,10 @@ def warning_state(title: str, message: str, details: tuple[str, ...] = ()) -> Pa
 
 def fault_state(title: str, message: str, details: tuple[str, ...] = ()) -> PageStateModel:
     return PageStateModel(kind=PageStateKind.FAULT, title=title, message=message, details=details)
+
+
+def success_state(title: str, message: str, details: tuple[str, ...] = ()) -> PageStateModel:
+    return PageStateModel(kind=PageStateKind.SUCCESS, title=title, message=message, details=details)
 
 
 def empty_state(title: str, message: str, details: tuple[str, ...] = ()) -> PageStateModel:

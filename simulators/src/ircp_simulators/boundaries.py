@@ -1,32 +1,19 @@
-"""Simulator bundle boundaries for the supported-v1 slice."""
+"""Simulator catalog boundary for the single-wavelength v1 workflow."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from ircp_drivers import (
-    ArduinoMuxDriver,
-    LabOneHF2Driver,
-    MircatDriver,
-    PicoScopeDriver,
-    T660TimingDriver,
-)
-
-
-@dataclass(frozen=True)
-class SupportedV1SimulatorBundle:
-    scenario_id: str
-    mircat: MircatDriver
-    hf2li: LabOneHF2Driver
-    t660_master: T660TimingDriver
-    t660_slave: T660TimingDriver
-    mux: ArduinoMuxDriver
-    picoscope: PicoScopeDriver
-    description: str = ""
+from .golden_path import SimulatorScenarioContext
 
 
 @runtime_checkable
 class SimulatorCatalog(Protocol):
-    async def create_bundle(self, scenario_id: str) -> SupportedV1SimulatorBundle:
-        """Create a deterministic supported-v1 simulator bundle for one named scenario."""
+    def list_contexts(self) -> tuple[SimulatorScenarioContext, ...]:
+        """Return deterministic simulator contexts."""
+
+    def get_context(self, scenario_id: str) -> SimulatorScenarioContext:
+        """Return one deterministic simulator context."""
+
+
+SupportedV1SimulatorBundle = SimulatorScenarioContext

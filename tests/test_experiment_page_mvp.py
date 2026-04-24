@@ -1,215 +1,164 @@
-"""Focused operator-first Experiment page regression tests."""
+"""Model-level tests for the three-page single-wavelength workflow."""
 
 from __future__ import annotations
 
 import asyncio
-import re
-import unittest
-from html import unescape
-from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib.parse import urlencode
-from wsgiref.util import setup_testing_defaults
+import unittest
 
 try:
     from _path_setup import ROOT  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - depends on unittest invocation style
+except ModuleNotFoundError:  # pragma: no cover
     from tests._path_setup import ROOT
-from ircp_platform import create_simulator_app, create_simulator_runtime_map
+from ircp_platform import create_simulator_runtime_map
+from ircp_ui_shell.components import render_session_page
 
 
-def _call_wsgi(
-    app,
-    *,
-    method: str,
-    path: str,
-    body: dict[str, str] | None = None,
-) -> tuple[str, dict[str, str], str]:
-    environ: dict[str, object] = {}
-    setup_testing_defaults(environ)
-    environ["REQUEST_METHOD"] = method.upper()
-    if "?" in path:
-        route_path, query = path.split("?", 1)
-    else:
-        route_path, query = path, ""
-    environ["PATH_INFO"] = route_path
-    environ["QUERY_STRING"] = query
-    encoded_body = urlencode(body or {}).encode("utf-8")
-    environ["CONTENT_LENGTH"] = str(len(encoded_body))
-    environ["CONTENT_TYPE"] = "application/x-www-form-urlencoded"
-    environ["wsgi.input"] = BytesIO(encoded_body)
-    captured: dict[str, object] = {}
-
-    def start_response(status: str, headers: list[tuple[str, str]]) -> None:
-        captured["status"] = status
-        captured["headers"] = dict(headers)
-
-    payload = b"".join(app(environ, start_response))
-    return (
-        str(captured["status"]),
-        captured["headers"],  # type: ignore[return-value]
-        payload.decode("utf-8"),
-    )
-
-
-def _visible_text(markup: str) -> str:
-    markup = re.sub(r"<style\b[^>]*>.*?</style>", " ", markup, flags=re.IGNORECASE | re.DOTALL)
-    markup = re.sub(r"<script\b[^>]*>.*?</script>", " ", markup, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<[^>]+>", " ", markup)
-    text = unescape(text)
-    return re.sub(r"\s+", " ", text).strip().lower()
-
-
-class ExperimentPageMvpTests(unittest.TestCase):
-    def _create_runtime_map(self):
+class ThreePageWorkflowModelTests(unittest.TestCase):
+    def _temp_root(self) -> Path:
         tempdir = TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
-        return create_simulator_runtime_map(storage_root=Path(tempdir.name))
+        return Path(tempdir.name)
 
-    def _create_app(self):
-        tempdir = TemporaryDirectory()
-        self.addCleanup(tempdir.cleanup)
-        return create_simulator_app(storage_root=Path(tempdir.name))
+    def test_header_navigation_is_exactly_session_setup_results(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-    def _get_experiment_mode_field(self, page):
-        for field in page.laser_panel.fields:
-            if field.name == "experiment_type":
-                return field
-        self.skipTest("Experiment type selector is not present in the current Experiment page.")
+        header = asyncio.run(runtime.get_header_status("session"))
 
-    @staticmethod
-    def _visible_action_labels(page) -> tuple[str, ...]:
-        return tuple(button.label for button in page.laser_panel.actions if not button.hidden)
+        self.assertEqual(tuple(item.label for item in header.navigation), ("Session", "Setup", "Results"))
 
-    def test_root_lands_on_the_experiment_page(self) -> None:
-        app = self._create_app()
+    def test_session_page_has_session_and_run_information_sections(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-        root_status, root_headers, _ = _call_wsgi(app, method="GET", path="/")
-        experiment_status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
+        page = asyncio.run(runtime.get_session_page())
+        experiment_type = next(field for field in page.session_panel.fields if field.name == "experiment_type")
 
-        self.assertEqual(root_status, "303 See Other")
-        self.assertEqual(root_headers["Location"], "/experiment")
-        self.assertEqual(experiment_status, "200 OK")
-        self.assertIn("experiment", _visible_text(body))
+        self.assertEqual(page.title, "Session")
+        self.assertEqual(page.session_panel.title, "Session Information")
+        self.assertEqual(page.run_header_panel.title, "Run Information")
+        self.assertEqual(experiment_type.field_type, "select")
+        self.assertEqual(tuple(option.label for option in experiment_type.options), ("Single-Wavelength",))
+        self.assertEqual(tuple(action.label for action in page.session_panel.actions), ("Save",))
+        self.assertEqual(tuple(action.label for action in page.run_header_panel.actions), ("Save",))
+        self.assertEqual(tuple(field.label for field in page.session_panel.fields), ("Experiment type", "Name / ID", "Operator", "Sample ID or sample name", "Sample notes", "Notes"))
+        self.assertEqual(tuple(field.label for field in page.run_header_panel.fields), ("Name / ID", "Notes"))
 
-    def test_experiment_page_keeps_the_operator_first_core_sections(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
-        text = _visible_text(body)
+    def test_session_page_does_not_render_redundant_top_session_section(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-        self.assertEqual(status, "200 OK")
-        for label in (
-            "mircat",
-            "session",
-            "nd:yag settings",
-            "hf2li",
-            "run control",
-        ):
-            self.assertIn(label, text)
+        page = asyncio.run(runtime.get_session_page())
+        html = render_session_page(page)
 
-    def test_experiment_page_excludes_advanced_and_legacy_device_clutter(self) -> None:
-        app = self._create_app()
-        status, _headers, body = _call_wsgi(app, method="GET", path="/experiment")
-        text = _visible_text(body)
+        self.assertNotIn('class="hero"', html)
+        self.assertIn("Session Information", html)
 
-        self.assertEqual(status, "200 OK")
-        for forbidden in (
-            "opo",
-            "pico",
-            "t660",
-            "mux route",
-            "readiness matrix",
-            "workflow review map",
-            "pump shots before probe",
-            "current mircat status",
-            "readout component",
-            "start acquisition",
-            "stop acquisition",
-            "acquisition status",
-            "live status",
-            "recent activity",
-            "probe settings",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, text)
+    def test_setup_page_has_exact_required_sections_and_no_extra_section(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
 
-    def test_fixed_mode_keeps_single_wavelength_controls_when_mode_switch_exists(self) -> None:
-        runtimes = self._create_runtime_map()
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-        mode_field = self._get_experiment_mode_field(operate_page)
+        page = asyncio.run(runtime.get_setup_page())
 
-        option_labels = {option.label for option in mode_field.options}
-        action_labels = self._visible_action_labels(operate_page)
-        field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
+        self.assertEqual(
+            [
+                page.pump_panel.title,
+                page.timescale_panel.title,
+                page.probe_panel.title,
+                page.lockin_panel.title,
+                page.run_controls_panel.title,
+            ],
+            [
+                "Pump Settings",
+                "Timescale",
+                "Probe Settings",
+                "Lock-In Amplifier Settings",
+                "Run Controls",
+            ],
+        )
 
-        self.assertIn("Fixed Wavelength", option_labels)
-        self.assertIn("Wavelength Scan", option_labels)
-        self.assertIn("Emission Mode", field_labels)
-        self.assertIn("Tune", action_labels)
-        self.assertNotIn("Start Scan", action_labels)
-        self.assertNotIn("Stop Scan", action_labels)
-        self.assertIn("Wavenumber (cm^-1)", field_labels)
-        self.assertNotIn("Start wavenumber (cm^-1)", field_labels)
-        self.assertNotIn("Stop wavenumber (cm^-1)", field_labels)
-
-    def test_scan_mode_swaps_in_scan_controls_when_mode_switch_exists(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
-        initial_page = asyncio.run(runtime.get_operate_page())
-        self._get_experiment_mode_field(initial_page)
-
-        asyncio.run(runtime.set_experiment_type("wavelength_scan"))
-        operate_page = asyncio.run(runtime.get_operate_page())
-
-        action_labels = self._visible_action_labels(operate_page)
-        field_labels = tuple(field.label for field in operate_page.laser_panel.fields)
-
-        self.assertIn("Start Scan", action_labels)
-        self.assertIn("Stop Scan", action_labels)
-        self.assertNotIn("Tune", action_labels)
-        self.assertIn("Emission Mode", field_labels)
-        self.assertIn("Start wavenumber (cm^-1)", field_labels)
-        self.assertIn("Stop wavenumber (cm^-1)", field_labels)
-        self.assertIn("Scan Speed", field_labels)
-        self.assertNotIn("Dwell time per point (ms)", field_labels)
-        self.assertNotIn("Wavenumber (cm^-1)", field_labels)
-
-    def test_pulsed_mode_exposes_pulse_fields(self) -> None:
-        runtimes = self._create_runtime_map()
-        runtime = runtimes["nominal"]
+    def test_results_page_supports_metric_family_and_display_mode(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
         asyncio.run(
-            runtime.configure_operating_mode(
-                experiment_type="fixed_wavelength",
-                emission_mode="pulsed",
+            runtime.save_session(
+                session_name="Session",
+                operator="Operator",
+                sample_id="Sample",
+                sample_notes="",
+                experiment_notes="",
             )
         )
-        operate_page = asyncio.run(runtime.get_operate_page())
-        field_labels = {field.label for field in operate_page.laser_panel.fields}
+        asyncio.run(runtime.save_run_header(run_name="Run 1", run_notes=""))
+        asyncio.run(runtime.start_run())
 
-        self.assertIn("Pulse repetition rate (Hz)", field_labels)
-        self.assertIn("Pulse width (ns)", field_labels)
-        self.assertIn("Duty cycle (%)", field_labels)
+        overlay = asyncio.run(runtime.get_results_page(metric_family="X", display_mode="overlay"))
+        ratio = asyncio.run(runtime.get_results_page(metric_family="Theta", display_mode="ratio"))
 
-    def test_ui_shell_stays_on_typed_presentation_boundaries(self) -> None:
-        ui_root = Path(ROOT) / "ui-shell" / "src" / "ircp_ui_shell"
-        boundary_source = (ui_root / "boundaries.py").read_text(encoding="utf-8")
-        banned_fragments = (
-            "ircp_drivers",
-            "ircp_data_pipeline",
-            "ircp_processing",
-            "ircp_analysis",
-            "Control_System",
+        self.assertIsNotNone(overlay.plot)
+        self.assertIsNotNone(ratio.plot)
+        assert overlay.plot is not None
+        assert ratio.plot is not None
+        self.assertEqual(overlay.plot.metric_family, "X")
+        self.assertEqual(overlay.plot.display_mode, "overlay")
+        self.assertEqual(ratio.plot.metric_family, "Theta")
+        self.assertEqual(ratio.plot.display_mode, "ratio")
+
+    def test_user_entered_name_becomes_session_and_run_id(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
+
+        session_id = asyncio.run(
+            runtime.save_session(
+                session_name="Session 001",
+                operator="Operator",
+                sample_id="Sample",
+                sample_notes="",
+                experiment_notes="",
+            )
         )
+        run_id = asyncio.run(runtime.save_run_header(run_name="Run 001", run_notes=""))
 
-        self.assertIn("class UiQueryService(Protocol)", boundary_source)
-        self.assertIn("class UiCommandService(Protocol)", boundary_source)
-        self.assertIn("class UiRuntimeGateway(UiQueryService, UiCommandService, Protocol)", boundary_source)
+        self.assertEqual(session_id, "Session 001")
+        self.assertEqual(run_id, "Run 001")
 
-        for path in ui_root.glob("*.py"):
-            source = path.read_text(encoding="utf-8")
-            for fragment in banned_fragments:
-                self.assertNotIn(fragment, source, f"{path.name} should not import {fragment}")
+    def test_duplicate_run_id_is_rejected_for_same_session(self) -> None:
+        runtime = create_simulator_runtime_map(storage_root=self._temp_root())["nominal"]
+
+        asyncio.run(
+            runtime.save_session(
+                session_name="Session 001",
+                operator="Operator",
+                sample_id="Sample",
+                sample_notes="",
+                experiment_notes="",
+            )
+        )
+        asyncio.run(runtime.save_run_header(run_name="Run 001", run_notes=""))
+
+        with self.assertRaisesRegex(ValueError, "Run ID already exists in session Session 001: Run 001"):
+            asyncio.run(runtime.create_run(run_name="Run 001", run_notes=""))
+
+    def test_existing_run_requires_opened_session_before_opening(self) -> None:
+        root = self._temp_root()
+        runtime = create_simulator_runtime_map(storage_root=root)["nominal"]
+
+        asyncio.run(
+            runtime.save_session(
+                session_name="Session 001",
+                operator="Operator",
+                sample_id="Sample",
+                sample_notes="",
+                experiment_notes="",
+            )
+        )
+        asyncio.run(runtime.save_run_header(run_name="Run 001", run_notes=""))
+
+        fresh_runtime = create_simulator_runtime_map(storage_root=root)["nominal"]
+        with self.assertRaisesRegex(ValueError, "Open the session before opening one of its runs."):
+            asyncio.run(fresh_runtime.open_run(session_id="Session 001", run_id="Run 001"))
+
+        opened_session_id = asyncio.run(fresh_runtime.open_session(session_id="Session 001"))
+        opened_run_id = asyncio.run(fresh_runtime.open_run(session_id="Session 001", run_id="Run 001"))
+
+        self.assertEqual(opened_session_id, "Session 001")
+        self.assertEqual(opened_run_id, "Run 001")
 
 
 if __name__ == "__main__":

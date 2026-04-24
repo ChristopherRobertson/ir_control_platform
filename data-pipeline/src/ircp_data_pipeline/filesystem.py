@@ -127,7 +127,7 @@ def _require_pyarrow():
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
-    except ModuleNotFoundError as exc:
+    except (ModuleNotFoundError, AttributeError) as exc:
         repo_root = Path(__file__).resolve().parents[3]
         for site_packages in (
             repo_root / "ircpenv" / "Lib" / "site-packages",
@@ -138,7 +138,7 @@ def _require_pyarrow():
                 try:
                     import pyarrow as pa
                     import pyarrow.parquet as pq
-                except ModuleNotFoundError:
+                except (ModuleNotFoundError, AttributeError):
                     continue
                 return pa, pq
         raise ModuleNotFoundError(
@@ -182,6 +182,7 @@ class FilesystemSessionStore(InMemorySessionStore):
         self._root = Path(root).resolve()
         self._sessions_root = self._root / "sessions"
         self._sessions_root.mkdir(parents=True, exist_ok=True)
+        _require_pyarrow()
         super().__init__(initial_manifests=())
         self._reload_from_disk()
         self._seed_initial_state(
