@@ -1,0 +1,91 @@
+{
+  "version": "supported-v1",
+  "experiment_id": "single_wavelength_pump_probe_v1",
+  "display_name": "Single-Wavelength Pump-Probe",
+  "description": "Generic, sample-agnostic single-wavelength pump-probe transient measurement using YAG/OPO pump, MIRcat probe, and HF2LI acquisition.",
+  "required_hardware_families": [
+    "yag_opo_pump_path",
+    "mircat_probe",
+    "labone_hf2li",
+    "timing_path"
+  ],
+  "required_session_metadata": [
+    "experiment_type",
+    "session_name_or_id",
+    "operator",
+    "sample_id_or_name",
+    "sample_notes",
+    "experiment_notes",
+    "created_timestamp",
+    "updated_timestamp"
+  ],
+  "required_run_metadata": [
+    "run_name_or_number",
+    "run_notes",
+    "session_reference",
+    "settings_snapshot",
+    "timescale_regime",
+    "probe_settings",
+    "pump_settings",
+    "lockin_settings",
+    "raw_data",
+    "processed_data",
+    "start_timestamp",
+    "end_timestamp",
+    "completion_status",
+    "fault_error_state"
+  ],
+  "required_setup_fields": [
+    "pump.enabled",
+    "pump.shot_count",
+    "timescale.regime",
+    "probe.wavelength_cm1",
+    "probe.emission_mode",
+    "lockin.order",
+    "lockin.time_constant_seconds",
+    "lockin.transfer_rate_hz"
+  ],
+  "timescale_regime_enum": [
+    "nanoseconds",
+    "microseconds",
+    "milliseconds"
+  ],
+  "required_saved_raw_signals": [
+    "time",
+    "sample_X",
+    "sample_Y",
+    "sample_R",
+    "sample_Theta",
+    "reference_X",
+    "reference_Y",
+    "reference_R",
+    "reference_Theta",
+    "session_id",
+    "run_id",
+    "settings_snapshot_id"
+  ],
+  "result_plot_modes": [
+    "overlay",
+    "ratio"
+  ],
+  "result_metric_families": [
+    "X",
+    "Y",
+    "R",
+    "Theta"
+  ],
+  "forbidden_features_v1": [
+    "wavelength_scanning",
+    "multi_wavelength_queues",
+    "spectral_maps",
+    "delay_grid_controls",
+    "step_size_controls",
+    "number_of_points_controls",
+    "generic_device_dashboard",
+    "separate_data_acquisition_section",
+    "separate_run_page",
+    "real_time_plotting",
+    "preflight_page_or_section",
+    "sample_specific_product_logic"
+  ]
+}

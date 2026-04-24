@@ -8,6 +8,6 @@ Deterministic simulator bundles and scenario fixtures for the supported v1 contr
 
 Typical scenario classes:
 - nominal
-- blocked or preflight-failure scenarios
+- blocked setup scenarios
 - warning or degraded scenarios
 - faulted scenarios

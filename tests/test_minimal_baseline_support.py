@@ -1,4 +1,4 @@
-"""Minimal baseline simulator and fixture support tests."""
+"""Simulator-backed vertical-slice tests for Session -> Setup -> Results."""
 
 from __future__ import annotations
 
@@ -9,104 +9,213 @@ import unittest
 
 try:
     from _path_setup import ROOT  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - depends on unittest invocation style
+except ModuleNotFoundError:  # pragma: no cover
     from tests._path_setup import ROOT
+from ircp_contracts import RunLifecycleState
 from ircp_platform import create_simulator_runtime_map
-from ircp_simulators import SupportedV1SimulatorCatalog
 
 
-class MinimalBaselineSupportTests(unittest.TestCase):
+class SingleWavelengthVerticalSliceTests(unittest.TestCase):
     def _temp_root(self) -> Path:
         tempdir = TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         return Path(tempdir.name)
 
-    def test_nominal_runtime_seeds_session_defaults_and_finished_shell_context(self) -> None:
-        runtimes = create_simulator_runtime_map(storage_root=self._temp_root())
-        operate_page = asyncio.run(runtimes["nominal"].get_operate_page())
-        setup_page = asyncio.run(runtimes["nominal"].get_setup_page())
+    def _runtime(self, scenario: str = "nominal"):
+        return create_simulator_runtime_map(storage_root=self._temp_root())[scenario]
 
-        field_values = {field.name: field.value for field in operate_page.session_panel.fields}
-        self.assertEqual(field_values["session_id_input"], "saved-session-001-rerun")
-        self.assertEqual(field_values["session_label"], "MIRcat 1850 cm^-1 baseline")
-        self.assertEqual(field_values["sample_id"], "polymer-film-a12")
+    def _save_session_and_run(self, runtime) -> None:
+        asyncio.run(
+            runtime.save_session(
+                session_name="Session A",
+                operator="Operator A",
+                sample_id="Sample A",
+                sample_notes="Any sample.",
+                experiment_notes="Generic pump-probe test.",
+            )
+        )
+        asyncio.run(runtime.save_run_header(run_name="Run 1", run_notes="Saved run."))
+        asyncio.run(
+            runtime.save_setup(
+                pump_enabled=True,
+                shot_count=10,
+                timescale="microseconds",
+                wavelength_cm1=1850.0,
+                emission_mode="cw",
+                pulse_rate_hz=None,
+                pulse_width_ns=None,
+                order=2,
+                time_constant_seconds=0.1,
+                transfer_rate_hz=224.9,
+            )
+        )
+
+    def test_session_and_run_header_gating_blocks_setup_until_saved(self) -> None:
+        runtime = self._runtime()
+
+        session_page = asyncio.run(runtime.get_session_page())
+        setup_page = asyncio.run(runtime.get_setup_page())
+
+        self.assertEqual(session_page.title, "Session")
+        self.assertIsNotNone(session_page.state)
+        self.assertIn("metadata", session_page.state.title.lower())
+        self.assertIsNone(setup_page.state)
+        self.assertTrue(setup_page.run_controls_panel.actions[0].disabled)
+
+    def test_saved_metadata_and_default_setup_enable_run(self) -> None:
+        runtime = self._runtime()
+        self._save_session_and_run(runtime)
+
+        setup_page = asyncio.run(runtime.get_setup_page())
+
+        self.assertEqual(setup_page.title, "Setup")
         self.assertEqual(
-            field_values["operator_notes"],
-            "Fixed MIRcat baseline with continuous HF2LI acquisition.",
+            (
+                setup_page.pump_panel.title,
+                setup_page.timescale_panel.title,
+                setup_page.probe_panel.title,
+                setup_page.lockin_panel.title,
+                setup_page.run_controls_panel.title,
+            ),
+            (
+                "Pump Settings",
+                "Timescale",
+                "Probe Settings",
+                "Lock-In Amplifier Settings",
+                "Run Controls",
+            ),
         )
-        self.assertIn("recent_session_id", field_values)
-        self.assertGreaterEqual(len(operate_page.summary_metrics), 4)
-        self.assertGreaterEqual(len(operate_page.hardware_cards), 6)
-        self.assertGreaterEqual(len(setup_page.readiness_panels), 3)
-        self.assertGreaterEqual(len(setup_page.advanced_sections), 2)
+        self.assertFalse(setup_page.run_controls_panel.actions[0].disabled)
 
-    def test_mircat_simulator_supports_baseline_transitions(self) -> None:
-        context = SupportedV1SimulatorCatalog().get_context("nominal")
-        driver = context.bundle.mircat
+    def test_happy_path_persists_run_snapshot_raw_processed_and_results_reopen(self) -> None:
+        root = self._temp_root()
+        runtime = create_simulator_runtime_map(storage_root=root)["nominal"]
+        self._save_session_and_run(runtime)
 
-        disconnected = asyncio.run(driver.disconnect())
-        connected = asyncio.run(driver.connect())
-        tuning_snapshot = asyncio.run(driver.apply_configuration(context.recipe.mircat))
-        tuning_status = asyncio.run(driver.get_status())
-        armed = asyncio.run(driver.arm())
-        emission_on = asyncio.run(driver.set_emission_enabled(True))
-        disarmed = asyncio.run(driver.disarm())
+        run_id = asyncio.run(runtime.start_run())
+        results = asyncio.run(runtime.get_results_page(metric_family="R", display_mode="overlay"))
 
-        self.assertFalse(disconnected.connected)
-        self.assertEqual(disconnected.lifecycle_state.value, "disconnected")
-        self.assertTrue(connected.connected)
-        self.assertEqual(connected.vendor_status["tune_state"], "idle")
-        self.assertEqual(tuning_snapshot.device_id, "mircat-qcl")
-        self.assertEqual(tuning_status.vendor_status["tune_state"], "tuning")
-        self.assertTrue(tuning_status.ready)
-        self.assertIn("tuning", tuning_status.status_summary.lower())
-        self.assertTrue(armed.vendor_status["armed"])
-        self.assertEqual(armed.vendor_status["tune_state"], "tuned")
-        self.assertTrue(emission_on.vendor_status["emission_enabled"])
-        self.assertEqual(emission_on.vendor_status["tune_state"], "tuned")
-        self.assertFalse(disarmed.vendor_status["armed"])
-        self.assertEqual(disarmed.vendor_status["tune_state"], "idle")
+        self.assertEqual(results.selected_run_id, run_id)
+        self.assertIsNotNone(results.plot)
+        assert results.plot is not None
+        self.assertEqual(results.plot.metric_family, "R")
+        self.assertEqual(results.plot.display_mode, "overlay")
+        self.assertGreater(len(results.plot.points), 0)
+        self.assertIsNotNone(results.plot.points[0].sample)
+        self.assertIsNotNone(results.plot.points[0].reference)
+        self.assertTrue((root / "nominal" / "sessions").is_dir())
 
-    def test_hf2_simulator_supports_connect_run_stop_transitions(self) -> None:
-        context = SupportedV1SimulatorCatalog().get_context("nominal")
-        driver = context.bundle.hf2li
-        acquisition = context.recipe.hf2_primary_acquisition
+        recreated = create_simulator_runtime_map(storage_root=root)["nominal"]
+        reopened = asyncio.run(recreated.get_results_page(metric_family="R", display_mode="ratio"))
+        self.assertEqual(reopened.selected_run_id, run_id)
+        self.assertIsNotNone(reopened.plot)
+        assert reopened.plot is not None
+        self.assertEqual(reopened.plot.display_mode, "ratio")
+        self.assertIsNotNone(reopened.plot.points[0].ratio)
 
-        disconnected = asyncio.run(driver.disconnect())
-        connected = asyncio.run(driver.connect())
-        configured = asyncio.run(driver.apply_configuration(acquisition))
-        capture = asyncio.run(driver.start_capture(acquisition, "session-test-001"))
-        running = asyncio.run(driver.get_status())
-        stopped = asyncio.run(driver.stop_capture(capture.capture_id))
+    def test_faulted_path_persists_partial_raw_and_explicit_fault(self) -> None:
+        runtime = self._runtime("faulted_hf2")
+        self._save_session_and_run(runtime)
 
-        self.assertFalse(disconnected.connected)
-        self.assertTrue(connected.connected)
-        self.assertEqual(connected.vendor_status["acquisition_state"], "idle")
-        self.assertEqual(configured.device_id, "hf2li-primary")
-        self.assertEqual(running.vendor_status["acquisition_state"], "running")
-        self.assertTrue(running.vendor_status["capture_active"])
-        self.assertIn("running", running.status_summary.lower())
-        self.assertEqual(stopped.vendor_status["acquisition_state"], "stopped")
-        self.assertFalse(stopped.vendor_status["capture_active"])
-        self.assertIn("stopped", stopped.status_summary.lower())
+        run_id = asyncio.run(runtime.start_run())
+        results = asyncio.run(runtime.get_results_page(run_id=run_id))
 
-    def test_run_panel_exposes_validated_state_and_finished_actions_for_baseline(self) -> None:
-        runtimes = create_simulator_runtime_map(storage_root=self._temp_root())
+        self.assertIsNotNone(results.state)
+        assert results.state is not None
+        self.assertEqual(results.state.title, "Run faulted")
+        self.assertIn("HF2LI", results.state.message)
 
-        nominal_page = asyncio.run(runtimes["nominal"].get_operate_page())
-        blocked_page = asyncio.run(runtimes["blocked_timing"].get_operate_page())
-        action_labels = tuple(button.label for button in nominal_page.run_panel.actions)
+    def test_exports_are_available_from_saved_run(self) -> None:
+        runtime = self._runtime()
+        self._save_session_and_run(runtime)
+        run_id = asyncio.run(runtime.start_run())
+        results = asyncio.run(runtime.get_results_page())
+        assert results.selected_session_id is not None
 
-        nominal_state = next(
-            item.value for item in nominal_page.run_panel.status_items if item.label == "Current run state"
+        raw = asyncio.run(
+            runtime.get_results_download(
+                session_id=results.selected_session_id,
+                run_id=run_id,
+                asset="raw",
+            )
         )
-        blocked_state = next(
-            item.value for item in blocked_page.run_panel.status_items if item.label == "Current run state"
+        metadata = asyncio.run(
+            runtime.get_results_download(
+                session_id=results.selected_session_id,
+                run_id=run_id,
+                asset="metadata",
+            )
         )
 
-        self.assertEqual(action_labels, ("Run Preflight", "Start Run", "Abort Run"))
-        self.assertEqual(nominal_state, "Validated")
-        self.assertEqual(blocked_state, "Preflight blocked")
+        self.assertEqual(raw.content_type, "text/csv; charset=utf-8")
+        self.assertIn(b"sample_X", raw.body)
+        self.assertIn(b"settings_snapshot", metadata.body)
+
+    def test_save_setup_overwrites_previous_saved_settings_completely(self) -> None:
+        runtime = self._runtime()
+        asyncio.run(
+            runtime.save_session(
+                session_name="Session A",
+                operator="Operator A",
+                sample_id="Sample A",
+                sample_notes="Any sample.",
+                experiment_notes="Generic pump-probe test.",
+            )
+        )
+        asyncio.run(runtime.save_run_header(run_name="Run 1", run_notes="Saved run."))
+
+        asyncio.run(
+            runtime.save_setup(
+                pump_enabled=True,
+                shot_count=25,
+                timescale="milliseconds",
+                wavelength_cm1=1725.5,
+                emission_mode="pulsed",
+                pulse_rate_hz=5000.0,
+                pulse_width_ns=150.0,
+                order=4,
+                time_constant_seconds=0.25,
+                transfer_rate_hz=100.0,
+            )
+        )
+        asyncio.run(
+            runtime.save_setup(
+                pump_enabled=False,
+                shot_count=3,
+                timescale="nanoseconds",
+                wavelength_cm1=1850.0,
+                emission_mode="cw",
+                pulse_rate_hz=9999.0,
+                pulse_width_ns=999.0,
+                order=2,
+                time_constant_seconds=0.1,
+                transfer_rate_hz=224.9,
+            )
+        )
+
+        run_id = asyncio.run(runtime.start_run())
+        results = asyncio.run(runtime.get_results_page(run_id=run_id))
+        assert results.selected_session_id is not None
+        metadata = asyncio.run(
+            runtime.get_results_download(
+                session_id=results.selected_session_id,
+                run_id=run_id,
+                asset="metadata",
+            )
+        )
+
+        self.assertIn(b'"enabled": false', metadata.body)
+        self.assertIn(b'"shot_count": 3', metadata.body)
+        self.assertIn(b'"timescale": "nanoseconds"', metadata.body)
+        self.assertIn(b'"wavelength_cm1": 1850.0', metadata.body)
+        self.assertIn(b'"emission_mode": "cw"', metadata.body)
+        self.assertNotIn(b'"pulse_rate_hz": 5000.0', metadata.body)
+        self.assertNotIn(b'"pulse_width_ns": 150.0', metadata.body)
+        self.assertIn(b'"pulse_rate_hz": null', metadata.body)
+        self.assertIn(b'"pulse_width_ns": null', metadata.body)
+        self.assertIn(b'"order": 2', metadata.body)
+        self.assertIn(b'"time_constant_seconds": 0.1', metadata.body)
+        self.assertIn(b'"transfer_rate_hz": 224.9', metadata.body)
 
 
 if __name__ == "__main__":

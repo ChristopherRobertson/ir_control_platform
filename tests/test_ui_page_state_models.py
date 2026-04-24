@@ -20,10 +20,10 @@ class UiPageStateModelTests(unittest.TestCase):
         self.assertEqual(state.details, ("Ready for the focused Run workspace.",))
 
     def test_warning_state_helper_preserves_message(self) -> None:
-        state = warning_state("Scan limits", "Start Run remains fixed-wavelength only.")
+        state = warning_state("Setup blocked", "Run remains disabled until setup is valid.")
 
         self.assertEqual(state.kind, PageStateKind.WARNING)
-        self.assertEqual(state.message, "Start Run remains fixed-wavelength only.")
+        self.assertEqual(state.message, "Run remains disabled until setup is valid.")
 
 
 if __name__ == "__main__":

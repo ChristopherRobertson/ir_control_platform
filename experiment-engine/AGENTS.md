@@ -5,7 +5,7 @@ This package is the sole orchestrator of coordinated run behavior.
 
 ## Must own
 - run lifecycle state machine
-- preflight validation
+- setup validation and run-control gating
 - coordinated device sequencing
 - run command handling
 - run event emission
@@ -15,6 +15,7 @@ This package is the sole orchestrator of coordinated run behavior.
 - This package is the single writer of coordinated run state.
 - Use one approved path for each workflow.
 - Stop on explicit device faults or unrecoverable persistence failures.
+- Do not introduce a separate run page or standalone readiness surface for v1.
 - Do not import UI packages.
 - Do not own plotting, report layout, or scientific presentation concerns.
 - Keep transitions deterministic and testable.
