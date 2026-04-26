@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import importlib
 import unittest
 
 try:
     from _path_setup import ROOT  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover
     from tests._path_setup import ROOT
+import ircp_contracts
 from ircp_contracts import (
+    DeviceCapability,
+    DeviceKind,
     EXPERIMENT_ID,
     EXPERIMENT_NAME,
+    FaultCategory,
+    FaultSeverity,
     LockInSettings,
     PlotDisplayMode,
     PlotMetricFamily,
@@ -128,6 +134,66 @@ class SingleWavelengthContractTests(unittest.TestCase):
         self.assertEqual(raw.signals[0].time_seconds, 0.0)
         self.assertGreater(sample, 0)
         self.assertGreater(reference, 0)
+
+    def test_public_v1_root_excludes_deferred_scan_and_advanced_contracts(self) -> None:
+        forbidden_public_names = (
+            "ExperimentRecipe",
+            "ExperimentPreset",
+            "MircatEmissionMode",
+            "MircatExperimentConfiguration",
+            "MircatSpectralMode",
+            "MircatSweepScan",
+            "MircatStepMeasureScan",
+            "MircatMultispectralScan",
+            "MultispectralElement",
+            "TimeToWavenumberMapping",
+        )
+
+        for name in forbidden_public_names:
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(ircp_contracts, name))
+                self.assertNotIn(name, ircp_contracts.__all__)
+
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("ircp_contracts.experiment")
+
+    def test_mircat_driver_contract_is_single_wavelength_only(self) -> None:
+        from ircp_drivers.mircat import MircatCapabilityProfile, MircatDriver
+
+        profile = MircatCapabilityProfile(DeviceCapability(DeviceKind.MIRCAT, "MIRcat"))
+
+        self.assertEqual(profile.supported_emission_modes, (ProbeEmissionMode.CW, ProbeEmissionMode.PULSED))
+        self.assertTrue(profile.single_wavelength_only)
+        self.assertFalse(hasattr(profile, "supported_spectral_modes"))
+        self.assertTrue(hasattr(MircatDriver, "start_single_wavelength"))
+        self.assertTrue(hasattr(MircatDriver, "stop_single_wavelength"))
+        self.assertFalse(hasattr(MircatDriver, "start_recipe"))
+        self.assertFalse(hasattr(MircatDriver, "stop_recipe"))
+
+    def test_unsupported_mircat_scan_requests_normalize_to_blocking_faults(self) -> None:
+        from ircp_drivers.mircat import (
+            UNSUPPORTED_SCAN_REQUESTS_V1,
+            unsupported_scan_request_fault,
+        )
+
+        self.assertIn("wavelength_sweep", UNSUPPORTED_SCAN_REQUESTS_V1)
+        self.assertIn("step_measure_scan", UNSUPPORTED_SCAN_REQUESTS_V1)
+        self.assertIn("multispectral_scan", UNSUPPORTED_SCAN_REQUESTS_V1)
+
+        fault = unsupported_scan_request_fault(
+            "wavelength_sweep",
+            device_id="mircat-001",
+            detected_at=utc_now(),
+        )
+
+        self.assertEqual(fault.device_kind, DeviceKind.MIRCAT)
+        self.assertEqual(fault.category, FaultCategory.VALIDATION)
+        self.assertEqual(fault.severity, FaultSeverity.ERROR)
+        self.assertEqual(fault.code, "unsupported_v1_scan_request")
+        self.assertTrue(fault.blocking)
+        self.assertEqual(fault.context["requested_operation"], "wavelength_sweep")
+        self.assertEqual(fault.context["supported_operation"], "single_wavelength")
+        self.assertIn("single-wavelength only", fault.message)
 
 
 if __name__ == "__main__":

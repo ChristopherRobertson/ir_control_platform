@@ -18,7 +18,7 @@ from .common import (
     ValidationSeverity,
 )
 from .device import DeviceFault
-from .experiment import (
+from ._deferred_experiment import (
     AcquisitionTimingMode,
     MuxRouteSelection,
     PicoSecondaryCapture,

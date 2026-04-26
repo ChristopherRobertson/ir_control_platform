@@ -10,14 +10,13 @@ from ircp_contracts import (
     ArtifactSourceRole,
     ConfigurationScalar,
     DeviceFault,
-    ExperimentPreset,
-    ExperimentRecipe,
     PreflightReport,
     RunEvent,
     RunFailureReason,
     RunState,
     SessionManifest,
 )
+from ircp_contracts._deferred_experiment import ExperimentPreset, ExperimentRecipe
 from ircp_drivers import (
     ArduinoMuxDriver,
     LabOneHF2Driver,

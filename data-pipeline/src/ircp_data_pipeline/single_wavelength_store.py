@@ -28,6 +28,10 @@ from ircp_contracts import (
 )
 
 
+class PersistedRunLoadError(ValueError):
+    """Raised when a persisted single-wavelength record cannot be reloaded."""
+
+
 def _serialize_value(value: object) -> object:
     if is_dataclass(value):
         return {
@@ -310,10 +314,25 @@ class SingleWavelengthRunStore:
         _write_text_atomic(path, json.dumps(_serialize_value(payload), indent=2) + "\n")
 
     def _load_json(self, path: Path, cls: type[Any]) -> Any:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise
+        except json.JSONDecodeError as exc:
+            raise self._malformed_error(path, cls, str(exc)) from exc
         if not isinstance(payload, Mapping):
-            raise TypeError(f"Expected JSON object in {path}.")
-        return _deserialize_dataclass(cls, payload)
+            raise self._malformed_error(path, cls, "expected a JSON object")
+        try:
+            return _deserialize_dataclass(cls, payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise self._malformed_error(path, cls, str(exc)) from exc
+
+    def _malformed_error(self, path: Path, cls: type[Any], detail: str) -> PersistedRunLoadError:
+        try:
+            location = self.relative_path(path)
+        except ValueError:
+            location = str(path)
+        return PersistedRunLoadError(f"Malformed persisted {cls.__name__} at {location}: {detail}")
 
     def _write_raw_csv(self, path: Path, signals: tuple[RawSignalRecord, ...]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

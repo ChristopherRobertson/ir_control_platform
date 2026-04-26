@@ -15,7 +15,7 @@ from .common import (
     SessionStatus,
 )
 from .device import DeviceConfiguration, DeviceStatus
-from .experiment import (
+from ._deferred_experiment import (
     CalibrationReference,
     ExperimentPreset,
     ExperimentRecipe,

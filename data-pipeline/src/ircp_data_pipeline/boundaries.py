@@ -15,8 +15,6 @@ from ircp_contracts import (
     DeviceFault,
     DeviceKind,
     DeviceStatus,
-    ExperimentPreset,
-    ExperimentRecipe,
     ExportArtifact,
     MuxRouteSelection,
     MuxRoutingSummary,
@@ -29,9 +27,13 @@ from ircp_contracts import (
     RunFailureReason,
     SessionManifest,
     SessionStatus,
-    TimeToWavenumberMapping,
     TimingSummary,
     TimingMarker,
+)
+from ircp_contracts._deferred_experiment import (
+    ExperimentPreset,
+    ExperimentRecipe,
+    TimeToWavenumberMapping,
 )
 
 

@@ -14,13 +14,18 @@ from .boundaries import (
 )
 from .filesystem import FilesystemSessionStore
 from .in_memory import InMemorySessionStore
-from .single_wavelength_store import SingleWavelengthRunStore, processed_metric_records
+from .single_wavelength_store import (
+    PersistedRunLoadError,
+    SingleWavelengthRunStore,
+    processed_metric_records,
+)
 
 __all__ = [
     "ArtifactQuery",
     "ArtifactSummary",
     "FilesystemSessionStore",
     "InMemorySessionStore",
+    "PersistedRunLoadError",
     "ReplayPlan",
     "SessionCatalog",
     "SessionDetail",

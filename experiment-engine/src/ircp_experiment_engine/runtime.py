@@ -16,12 +16,12 @@ from ircp_contracts import (
     DeviceKind,
     DeviceLifecycleState,
     DeviceStatus,
-    ExperimentPreset,
-    ExperimentRecipe,
     FaultCategory,
     FaultSeverity,
     PicoMonitoringMode,
     PreflightReport,
+    ProbeEmissionMode,
+    ProbeSettings,
     PumpProbeAcquisitionSummary,
     ReadinessCheck,
     ReadinessState,
@@ -40,6 +40,12 @@ from ircp_contracts import (
     summarize_mux_routes,
     summarize_pico_capture,
 )
+from ircp_contracts._deferred_experiment import (
+    ExperimentPreset,
+    ExperimentRecipe,
+    MircatEmissionMode,
+    MircatSpectralMode,
+)
 from ircp_data_pipeline import SessionOpenRequest, SessionReplayer, SessionStore
 
 from .boundaries import (
@@ -54,6 +60,25 @@ from .boundaries import (
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _probe_settings_from_deferred_recipe(recipe: ExperimentRecipe) -> ProbeSettings:
+    mircat = recipe.mircat
+    if mircat.spectral_mode != MircatSpectralMode.SINGLE_WAVELENGTH:
+        raise ValueError("V1 MIRcat driver path supports only single-wavelength operation.")
+    if mircat.single_wavelength_cm1 is None:
+        raise ValueError("V1 MIRcat driver path requires a target wavenumber.")
+    emission_mode = (
+        ProbeEmissionMode.PULSED
+        if mircat.emission_mode == MircatEmissionMode.PULSED
+        else ProbeEmissionMode.CW
+    )
+    return ProbeSettings(
+        wavelength_cm1=mircat.single_wavelength_cm1,
+        emission_mode=emission_mode,
+        pulse_rate_hz=mircat.pulse_rate_hz,
+        pulse_width_ns=mircat.pulse_width_ns,
+    )
 
 
 def build_timing_summary(recipe: ExperimentRecipe) -> TimingSummary:
@@ -439,7 +464,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
                 )
                 pico_capture_id = pico_capture.capture_id if pico_capture is not None else None
 
-        await self._drivers.mircat.start_recipe(recipe.mircat, recipe.probe_timing_mode)
+        await self._drivers.mircat.start_single_wavelength(_probe_settings_from_deferred_recipe(recipe))
         self._active_captures[run_id] = RunCaptureHandles(
             hf2_capture_id=hf2_capture.capture_id,
             pico_capture_id=pico_capture_id,
@@ -687,7 +712,7 @@ class InMemoryRunCoordinator(RunCoordinator, RunMonitor):
             await self._drivers.hf2li.stop_capture(capture_handles.hf2_capture_id)
             if capture_handles.pico_capture_id is not None:
                 await self._drivers.picoscope.stop_capture(capture_handles.pico_capture_id)
-        await self._drivers.mircat.stop_recipe()
+        await self._drivers.mircat.stop_single_wavelength()
         await self._drivers.mircat.disarm()
         await self._drivers.t660_slave.stop_outputs()
         await self._drivers.t660_master.stop_outputs()

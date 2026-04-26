@@ -20,7 +20,7 @@ from ircp_contracts import (
     RunLifecycleState,
     TimescaleRegime,
 )
-from ircp_data_pipeline import SingleWavelengthRunStore
+from ircp_data_pipeline import PersistedRunLoadError, SingleWavelengthRunStore
 from ircp_experiment_engine import SingleWavelengthPumpProbeCoordinator
 
 
@@ -111,6 +111,51 @@ class SingleWavelengthPersistenceTests(unittest.TestCase):
         self.assertGreater(len(raw.signals), 0)
         self.assertIsNone(manifest.processed_record_id)
         self.assertIsNone(manifest.processed_data_path)
+
+    def test_invalid_acquisition_window_blocks_before_snapshot_or_raw_write(self) -> None:
+        root = self._temp_root()
+        store, session, header = self._saved_inputs(root)
+        coordinator = SingleWavelengthPumpProbeCoordinator(store)
+        setup = coordinator.build_setup_state(
+            session_saved=True,
+            run_header_saved=True,
+            pump=PumpSettings(enabled=True, shot_count=10),
+            timescale=TimescaleRegime.MILLISECONDS,
+            probe=ProbeSettings(wavelength_cm1=1850.0, emission_mode=ProbeEmissionMode.CW),
+            lockin=LockInSettings(order=2, time_constant_seconds=0.1, transfer_rate_hz=100_000_000.0),
+        )
+
+        self.assertFalse(setup.can_run)
+        self.assertTrue(
+            any(issue.code == "hf2_file_limit_exceeded" for issue in setup.validation_issues)
+        )
+        assert setup.acquisition_plan is not None
+        self.assertFalse(setup.acquisition_plan.valid)
+
+        with self.assertRaisesRegex(ValueError, "file-size limit"):
+            coordinator.start_run(session=session, run_header=header, setup=setup)
+
+        run_dir = root / "sessions" / session.session_id / "runs" / header.run_id
+        self.assertFalse((run_dir / "settings_snapshot.json").exists())
+        self.assertFalse((run_dir / "raw" / "raw_record.json").exists())
+        self.assertEqual(
+            store.load_run_record(session.session_id, header.run_id).completion_status,
+            RunLifecycleState.DRAFT,
+        )
+
+    def test_malformed_persisted_run_reload_fails_with_context(self) -> None:
+        root = self._temp_root()
+        store, session, header = self._saved_inputs(root)
+        run_path = root / "sessions" / session.session_id / "runs" / header.run_id / "run.json"
+        run_path.write_text('{"run_id": "run-001", "completion_status": "completed"}\n', encoding="utf-8")
+
+        reopened = SingleWavelengthRunStore(root)
+
+        with self.assertRaisesRegex(
+            PersistedRunLoadError,
+            r"Malformed persisted RunRecord at sessions/session-001/runs/run-001/run\.json",
+        ):
+            reopened.load_run_record(session.session_id, header.run_id)
 
 
 if __name__ == "__main__":

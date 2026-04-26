@@ -1,4 +1,4 @@
-"""Experiment recipe and preset contracts for the supported v1 slice."""
+"""Deferred broad experiment contracts kept out of the supported-v1 public root."""
 
 from __future__ import annotations
 

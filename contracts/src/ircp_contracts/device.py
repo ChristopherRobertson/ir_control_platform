@@ -18,7 +18,7 @@ from .common import (
     TimingControllerIdentity,
     TimingControllerRole,
 )
-from .experiment import MuxRouteSelection, PicoSecondaryCapture, TimingEvent, TimingWindow
+from ._deferred_experiment import MuxRouteSelection, PicoSecondaryCapture, TimingEvent, TimingWindow
 
 
 @dataclass(frozen=True)

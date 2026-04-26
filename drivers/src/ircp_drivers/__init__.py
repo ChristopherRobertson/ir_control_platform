@@ -3,7 +3,12 @@
 from .arduino_mux.interfaces import ArduinoMuxCapabilityProfile, ArduinoMuxDriver
 from .base import DeviceDriver
 from .labone_hf2.interfaces import HF2CapabilityProfile, HF2CaptureHandle, LabOneHF2Driver
-from .mircat.interfaces import MircatCapabilityProfile, MircatDriver
+from .mircat.interfaces import (
+    UNSUPPORTED_SCAN_REQUESTS_V1,
+    MircatCapabilityProfile,
+    MircatDriver,
+    unsupported_scan_request_fault,
+)
 from .picoscope.interfaces import PicoCapabilityProfile, PicoCaptureHandle, PicoScopeDriver
 from .t660.interfaces import T660CapabilityProfile, T660TimingConfiguration, T660TimingDriver
 
@@ -22,4 +27,6 @@ __all__ = [
     "T660CapabilityProfile",
     "T660TimingConfiguration",
     "T660TimingDriver",
+    "UNSUPPORTED_SCAN_REQUESTS_V1",
+    "unsupported_scan_request_fault",
 ]
